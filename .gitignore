@@ -1,0 +1,107 @@
+# ====================================================================
+# CrossDrop Master .gitignore (Android Kotlin + Desktop Python)
+# ====================================================================
+
+# --------------------------------------------------
+# Logs, Runtime State & Ephemeral Buffers
+# --------------------------------------------------
+*.log
+**/*.log
+crossdrop.log
+**/crossdrop.log
+crossdrop-desktop/Downloads/*
+!crossdrop-desktop/Downloads/.gitkeep
+**/Downloads/*
+!**/Downloads/.gitkeep
+
+# --------------------------------------------------
+# Android / Gradle Build Artifacts
+# --------------------------------------------------
+.gradle/
+**/.gradle/
+build/
+**/build/
+app/build/
+**/app/build/
+*.apk
+*.ap_
+*.aab
+*.dex
+*.class
+local.properties
+.navigation/
+captures/
+**/captures/
+.cxx/
+**/cxx/
+output.json
+
+# --------------------------------------------------
+# Python Artifacts, Builds & Virtual Environments
+# --------------------------------------------------
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*.dll
+*.exe
+.Python
+env/
+venv/
+ENV/
+.venv/
+env.bak/
+venv.bak/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+**/dist/
+eggs/
+.eggs/
+
+# --------------------------------------------------
+# Temporary & AI Scratch Files
+# --------------------------------------------------
+gemini-code-*.md
+*.tmp
+*.temp
+*.bak
+
+# --------------------------------------------------
+# IDE / Editor Caches
+# --------------------------------------------------
+.idea/
+**/.idea/
+*.iml
+**/*.iml
+.vscode/
+**/.vscode/
+*.swp
+*.swo
+*~
+
+# --------------------------------------------------
+# OS & File System Metadata
+# --------------------------------------------------
+.DS_Store
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+Desktop.ini
+desktop.ini
+$RECYCLE.BIN/
+
+# --------------------------------------------------
+# Security & Certificates (Zero-Leakage Invariant)
+# --------------------------------------------------
+certs/
+**/certs/
+*.pem
+*.key
+*.crt
