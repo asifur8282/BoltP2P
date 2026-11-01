@@ -11,7 +11,6 @@
 3. **10-Minute Volatile RAM Buffer:** Inbound transfer offers (text payloads or file metadata) reside exclusively in volatile memory. A strict 600-second TTL timer starts on arrival. If unaccepted at $t = 600\text{s}$, the memory reference is zeroed out and purged, the sender is notified of a timeout, and the socket closes cleanly.
 4. **Active-Lock Pipeline:** Once the recipient clicks "Accept" or "Download", the TCP socket enters a dedicated transfer lock, streaming 64 KB chunks until transmission finishes and the trailing SHA-256 digest is verified.
 5. **Direct-from-Camera Shutter:** CameraX captures raw camera frames directly into an in-memory `ByteBuffer` and streams across the socket without saving photos to mobile storage.
-6. **Utilitarian "Anti-Vibecoding" Design:** High-density, tactile UI with an engineered slate monochrome palette (`#0E1116`, `#161B22`, `#30363D`, `#F0F6FC`), crisp 1px borders, and zero gratuitous blurs or non-functional decorative animations.
 
 ---
 

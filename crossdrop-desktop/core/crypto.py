@@ -15,8 +15,10 @@ from typing import Tuple, Optional
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, x25519
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
 def generate_pairing_pin() -> str:
@@ -99,3 +101,53 @@ def create_server_ssl_context(cert_path: str, key_path: str) -> ssl.SSLContext:
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     return ctx
+
+
+# --------------------------------------------------
+# Ephemeral X25519 Key Exchange & AES-256-GCM Cipher
+# --------------------------------------------------
+
+def generate_x25519_keypair() -> Tuple[x25519.X25519PrivateKey, bytes]:
+    """Generate ephemeral X25519 private key and raw 32-byte public key."""
+    priv = x25519.X25519PrivateKey.generate()
+    pub_bytes = priv.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw
+    )
+    return priv, pub_bytes
+
+
+def derive_shared_secret(private_key: x25519.X25519PrivateKey, peer_pub_bytes: bytes) -> bytes:
+    """Compute Diffie-Hellman shared secret with peer's raw 32-byte public key."""
+    peer_pub = x25519.X25519PublicKey.from_public_bytes(peer_pub_bytes)
+    return private_key.exchange(peer_pub)
+
+
+def derive_session_key(shared_secret: bytes, pin_or_psk: str) -> bytes:
+    """Derive 256-bit AES session key using HKDF-SHA256 salted with pairing PIN."""
+    salt = pin_or_psk.encode("utf-8") if pin_or_psk else None
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        info=b"crossdrop-x25519-aesgcm"
+    ).derive(shared_secret)
+
+
+def encrypt_gcm(key: bytes, plaintext: bytes) -> bytes:
+    """Encrypt plaintext using AES-256-GCM. Returns 12-byte IV + ciphertext + 16-byte tag."""
+    iv = os.urandom(12)
+    aesgcm = AESGCM(key)
+    ciphertext_and_tag = aesgcm.encrypt(iv, plaintext, None)
+    return iv + ciphertext_and_tag
+
+
+def decrypt_gcm(key: bytes, data: bytes) -> bytes:
+    """Decrypt payload using AES-256-GCM expecting 12-byte IV + ciphertext + 16-byte tag."""
+    if len(data) < 28:
+        raise ValueError("Encrypted data too short for GCM (minimum 28 bytes required)")
+    iv = data[:12]
+    ciphertext_and_tag = data[12:]
+    aesgcm = AESGCM(key)
+    return aesgcm.decrypt(iv, ciphertext_and_tag, None)
+

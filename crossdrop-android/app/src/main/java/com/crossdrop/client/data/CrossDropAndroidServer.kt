@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.widget.Toast
+import com.crossdrop.client.ForegroundService
 import kotlinx.coroutines.*
 import org.json.JSONObject
 import java.io.File
@@ -18,6 +19,14 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
+
+data class IncomingFileOffer(
+    val transferId: String,
+    val filename: String,
+    val size: Long,
+    val acceptDeferred: CompletableDeferred<Boolean> = CompletableDeferred()
+)
 
 class CrossDropAndroidServer(
     private val context: Context,
@@ -26,6 +35,33 @@ class CrossDropAndroidServer(
     private var serverSocket: ServerSocket? = null
     private var serverScope: CoroutineScope? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val pendingOffers = ConcurrentHashMap<String, IncomingFileOffer>()
+
+    var onIncomingOffer: ((IncomingFileOffer) -> Unit)? = null
+    var onTextReceived: ((String) -> Unit)? = null
+    var onDownloadProgress: ((received: Long, total: Long, filename: String) -> Unit)? = null
+    var onDownloadComplete: ((file: File, success: Boolean) -> Unit)? = null
+    var sessionKeySupplier: (() -> ByteArray?)? = null
+    var isConnectedSupplier: (() -> Boolean)? = null
+
+    init {
+        ForegroundService.onAcceptAction = { transferId ->
+            acceptOffer(transferId)
+        }
+        ForegroundService.onRejectAction = { transferId ->
+            rejectOffer(transferId)
+        }
+    }
+
+    fun acceptOffer(transferId: String) {
+        ForegroundService.cancelIncomingTransferNotification(context, transferId)
+        pendingOffers[transferId]?.acceptDeferred?.complete(true)
+    }
+
+    fun rejectOffer(transferId: String) {
+        ForegroundService.cancelIncomingTransferNotification(context, transferId)
+        pendingOffers[transferId]?.acceptDeferred?.complete(false)
+    }
 
     fun start() {
         if (serverSocket != null) return
@@ -59,6 +95,16 @@ class CrossDropAndroidServer(
             val inStream = socket.getInputStream()
             val outStream = socket.getOutputStream()
 
+            // If phone is marked disconnected in app, reject any unsolicited incoming connections
+            if (isConnectedSupplier?.invoke() == false) {
+                Log.w("CrossDropServer", "Rejecting incoming connection from ${socket.inetAddress}: app is disconnected")
+                val rejectMeta = JSONObject().apply {
+                    put("reason", "DISCONNECTED")
+                }.toString().toByteArray(Charsets.UTF_8)
+                writeFrame(outStream, TYPE_REJECT, rejectMeta, ByteArray(0))
+                return@withContext
+            }
+
             val header = readFrameHeader(inStream)
             val metaBytes = if (header.metaLen > 0) readExactBytes(inStream, header.metaLen) else ByteArray(0)
             val metaJson = if (metaBytes.isNotEmpty()) JSONObject(String(metaBytes, Charsets.UTF_8)) else JSONObject()
@@ -68,7 +114,19 @@ class CrossDropAndroidServer(
                     val payloadBytes = if (header.payloadLen > 0) {
                         readExactBytes(inStream, header.payloadLen.toInt())
                     } else ByteArray(0)
-                    val text = String(payloadBytes, Charsets.UTF_8)
+
+                    val text = try {
+                        val sessionKey = sessionKeySupplier?.invoke()
+                        if (sessionKey != null && payloadBytes.size >= 28) {
+                            String(CryptoManager.decryptGcm(sessionKey, payloadBytes), Charsets.UTF_8)
+                        } else {
+                            String(payloadBytes, Charsets.UTF_8)
+                        }
+                    } catch (e: Exception) {
+                        Log.w("CrossDropServer", "Decryption failed, checking preview: ${e.message}")
+                        val fallback = metaJson.optString("preview", "")
+                        if (fallback.isNotEmpty()) fallback else String(payloadBytes, Charsets.UTF_8)
+                    }
                     Log.i("CrossDropServer", "Received text from PC: ${text.take(32)}...")
 
                     mainHandler.post {
@@ -78,28 +136,75 @@ class CrossDropAndroidServer(
                             clipboard.setPrimaryClip(clip)
                         }
                         Toast.makeText(context, "CrossDrop: Copied text from PC", Toast.LENGTH_SHORT).show()
+                        onTextReceived?.invoke(text)
                     }
                 }
 
                 TYPE_FILE -> {
                     val rawFilename = metaJson.optString("filename", "received_${System.currentTimeMillis()}.bin")
-                    val filename = File(rawFilename).name
+                    val cleanName = File(rawFilename.replace('\\', '/')).name.replace("\u0000", "").trim()
+                    val filename = if (cleanName.isEmpty() || cleanName == "." || cleanName == "..") {
+                        "received_${System.currentTimeMillis()}.bin"
+                    } else {
+                        cleanName
+                    }
                     val totalSize = metaJson.optLong("size", header.payloadLen)
                     val transferId = metaJson.optString("id", "file_${System.currentTimeMillis()}")
 
-                    Log.i("CrossDropServer", "Incoming file from PC: $filename ($totalSize bytes)")
+                    Log.i("CrossDropServer", "Incoming file offer: $filename ($totalSize bytes)")
 
-                    // 1. Automatically accept file transfer from PC
+                    val offer = IncomingFileOffer(transferId, filename, totalSize)
+                    pendingOffers[transferId] = offer
+
+                    val sizeStr = if (totalSize > 1024 * 1024) "%.2f MB".format(totalSize / (1024f * 1024f)) else "%.1f KB".format(totalSize / 1024f)
+                    ForegroundService.postIncomingTransferNotification(
+                        context,
+                        transferId,
+                        "Incoming File: $filename",
+                        "$sizeStr • Tap to accept or reject"
+                    )
+
+                    mainHandler.post {
+                        onIncomingOffer?.invoke(offer)
+                    }
+
+                    // Await user approval (up to 10 minutes)
+                    val accepted = try {
+                        withTimeout(600_000L) {
+                            offer.acceptDeferred.await()
+                        }
+                    } catch (e: Exception) {
+                        false
+                    } finally {
+                        pendingOffers.remove(transferId)
+                        ForegroundService.cancelIncomingTransferNotification(context, transferId)
+                    }
+
+                    if (!accepted) {
+                        Log.i("CrossDropServer", "File transfer declined/expired: $transferId")
+                        val rejectMeta = JSONObject().apply {
+                            put("id", transferId)
+                            put("reason", "DECLINED_OR_TIMEOUT")
+                        }.toString().toByteArray(Charsets.UTF_8)
+                        writeFrame(outStream, TYPE_REJECT, rejectMeta, ByteArray(0))
+                        return@withContext
+                    }
+
+                    // 1. User accepted: send authorization frame
                     val acceptMeta = JSONObject().apply {
                         put("id", transferId)
                         put("status", "ACCEPTED")
                     }.toString().toByteArray(Charsets.UTF_8)
                     writeFrame(outStream, TYPE_ACCEPT, acceptMeta, ByteArray(0))
 
-                    // 2. Stream chunks directly to Downloads
-                    val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    // 2. Stream chunks directly to Downloads/CrossDrop
+                    val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "CrossDrop")
                     if (!downloadsDir.exists()) downloadsDir.mkdirs()
                     val targetFile = File(downloadsDir, filename)
+                    if (!targetFile.canonicalPath.startsWith(downloadsDir.canonicalPath)) {
+                        Log.e("CrossDropServer", "Path traversal blocked: $rawFilename")
+                        throw SecurityException("Path traversal outside Downloads/CrossDrop directory")
+                    }
 
                     val digest = MessageDigest.getInstance("SHA-256")
                     var bytesReceived = 0L
@@ -113,6 +218,11 @@ class CrossDropAndroidServer(
                             fos.write(chunk, 0, read)
                             digest.update(chunk, 0, read)
                             bytesReceived += read
+
+                            val curBytes = bytesReceived
+                            mainHandler.post {
+                                onDownloadProgress?.invoke(curBytes, totalSize, filename)
+                            }
                         }
                     }
 
@@ -133,7 +243,8 @@ class CrossDropAndroidServer(
                         writeFrame(outStream, TYPE_ACK, ackMeta, ByteArray(0))
 
                         mainHandler.post {
-                            Toast.makeText(context, "CrossDrop: Saved $filename to Downloads", Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, "CrossDrop: Saved $filename to Downloads/CrossDrop", Toast.LENGTH_LONG).show()
+                            onDownloadComplete?.invoke(targetFile, true)
                         }
                     } else {
                         Log.e("CrossDropServer", "SHA-256 mismatch for $filename (expected $expectedSha, got $computedSha)")
@@ -143,6 +254,10 @@ class CrossDropAndroidServer(
                             put("status", "INTEGRITY_FAIL")
                         }.toString().toByteArray(Charsets.UTF_8)
                         writeFrame(outStream, TYPE_REJECT, rejectMeta, ByteArray(0))
+
+                        mainHandler.post {
+                            onDownloadComplete?.invoke(targetFile, false)
+                        }
                     }
                 }
                 else -> {

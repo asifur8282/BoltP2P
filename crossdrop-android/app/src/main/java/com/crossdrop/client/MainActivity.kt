@@ -15,9 +15,23 @@ import com.crossdrop.client.data.CameraStreamManager
 import com.crossdrop.client.data.CrossDropAndroidServer
 import com.crossdrop.client.data.CrossDropSocketClient
 import com.crossdrop.client.data.DiscoveryManager
+import com.crossdrop.client.data.IncomingFileOffer
 import com.crossdrop.client.ui.MainScreen
 import com.crossdrop.client.ui.theme.CrossDropTheme
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+data class SessionSharedItem(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val isOutgoing: Boolean,
+    val type: String,
+    val filePath: String? = null,
+    val uriString: String? = null,
+    val timestamp: String = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(java.util.Date())
+)
 
 class MainActivity : ComponentActivity() {
 
@@ -30,12 +44,23 @@ class MainActivity : ComponentActivity() {
     private var clipboardContent by mutableStateOf("")
     private var activeHost by mutableStateOf("192.168.1.100")
     private var activePort by mutableIntStateOf(58241)
-    private var connectionStatus by mutableStateOf("Searching LAN...")
+    private var isConnectedState by mutableStateOf(false)
+    private var connectionStatus by mutableStateOf("Ready to connect")
+    private var currentIncomingOffer by mutableStateOf<IncomingFileOffer?>(null)
+    private val sharedHistory = mutableStateListOf<SessionSharedItem>()
+
+    private var isDownloading by mutableStateOf(false)
+    private var downloadProgress by mutableFloatStateOf(0f)
+    private var downloadFileName by mutableStateOf("")
+    private var downloadStatusText by mutableStateOf("")
 
     private val requestCameraPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
             hasCameraPermission = isGranted
         }
+
+    private val requestNotificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ -> }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,9 +72,75 @@ class MainActivity : ComponentActivity() {
 
         socketClient = CrossDropSocketClient(activeHost, activePort)
         cameraStreamManager = CameraStreamManager(this)
-        androidServer = CrossDropAndroidServer(this, 58242).apply { start() }
+        androidServer = CrossDropAndroidServer(this, 58242).apply {
+            sessionKeySupplier = { socketClient.sessionKey }
+            isConnectedSupplier = { isConnectedState }
+            onIncomingOffer = { offer ->
+                runOnUiThread {
+                    currentIncomingOffer = offer
+                }
+            }
+            onTextReceived = { text ->
+                runOnUiThread {
+                    sharedHistory.add(0, SessionSharedItem(
+                        id = java.util.UUID.randomUUID().toString(),
+                        title = text.take(60),
+                        subtitle = "Received from PC clipboard",
+                        isOutgoing = false,
+                        type = "TEXT"
+                    ))
+                }
+            }
+            onDownloadProgress = { received, total, fname ->
+                runOnUiThread {
+                    isDownloading = true
+                    downloadFileName = fname
+                    downloadProgress = if (total > 0) received.toFloat() / total.toFloat() else 0.5f
+                    val recStr = if (received > 1024 * 1024) "%.2f MB".format(received / (1024f * 1024f)) else "%.1f KB".format(received / 1024f)
+                    val totStr = if (total > 1024 * 1024) "%.2f MB".format(total / (1024f * 1024f)) else "%.1f KB".format(total / 1024f)
+                    downloadStatusText = "$recStr / $totStr (${(downloadProgress * 100).toInt()}%)"
+                }
+            }
+            onDownloadComplete = { file, success ->
+                runOnUiThread {
+                    isDownloading = false
+                    downloadProgress = 0f
+                    if (success) {
+                        val fsize = file.length()
+                        val sizeStr = if (fsize > 1024 * 1024) "%.2f MB".format(fsize / (1024f * 1024f)) else "%.1f KB".format(fsize / 1024f)
+                        sharedHistory.add(0, SessionSharedItem(
+                            id = java.util.UUID.randomUUID().toString(),
+                            title = file.name,
+                            subtitle = "Downloads/CrossDrop ($sizeStr) • Tap to Open",
+                            isOutgoing = false,
+                            type = "FILE",
+                            filePath = file.absolutePath
+                        ))
+                    }
+                }
+            }
+            start()
+        }
+
+        // Start background foreground listener
+        ForegroundService.start(this)
 
         checkCameraPermission()
+        checkNotificationPermission()
+
+        // Background KeepAlive Heartbeat (Pauses during active transfers)
+        lifecycleScope.launch {
+            while (isActive) {
+                delay(5000L)
+                if (isConnectedState && !socketClient.isTransferring) {
+                    val ok = socketClient.sendHeartbeat()
+                    if (!ok && !socketClient.isTransferring) {
+                        isConnectedState = false
+                        connectionStatus = "Disconnected"
+                    }
+                }
+            }
+        }
 
         // Initialize mDNS discovery for desktop daemon
         discoveryManager = DiscoveryManager(this) { name, ip, port ->
@@ -57,14 +148,18 @@ class MainActivity : ComponentActivity() {
                 activeHost = ip
                 activePort = port
                 socketClient.updateTarget(ip, port)
-                connectionStatus = "Discovered: $name"
                 prefs.edit().putString("pc_host", ip).putInt("pc_port", port).apply()
 
-                // Attempt auto-connect
-                lifecycleScope.launch {
-                    val connected = socketClient.connect(ip, port)
-                    if (connected) {
-                        connectionStatus = "Connected to $name"
+                if (!isConnectedState) {
+                    lifecycleScope.launch {
+                        connectionStatus = "Connecting to $name..."
+                        val connected = socketClient.connect(ip, port)
+                        if (connected) {
+                            isConnectedState = true
+                            connectionStatus = "Connected to $name"
+                        } else {
+                            connectionStatus = "Discovered: $name"
+                        }
                     }
                 }
             }
@@ -81,20 +176,48 @@ class MainActivity : ComponentActivity() {
                     onRequestCameraPermission = {
                         requestCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                     },
-                    onManualConnect = { host, port ->
+                    isConnected = isConnectedState,
+                    connectionStatus = connectionStatus,
+                    activeHost = activeHost,
+                    activePort = activePort,
+                    incomingOffer = currentIncomingOffer,
+                    sharedHistory = sharedHistory,
+                    isDownloading = isDownloading,
+                    downloadProgress = downloadProgress,
+                    downloadFileName = downloadFileName,
+                    downloadStatusText = downloadStatusText,
+                    onAcceptOffer = { transferId ->
+                        androidServer.acceptOffer(transferId)
+                        currentIncomingOffer = null
+                    },
+                    onRejectOffer = { transferId ->
+                        androidServer.rejectOffer(transferId)
+                        currentIncomingOffer = null
+                    },
+                    onConnect = { host, port, pin ->
                         activeHost = host
                         activePort = port
                         prefs.edit().putString("pc_host", host).putInt("pc_port", port).apply()
                         socketClient.updateTarget(host, port)
                         lifecycleScope.launch {
-                            connectionStatus = "Connecting..."
-                            val ok = socketClient.connect(host, port)
-                            connectionStatus = if (ok) "Connected to $host" else "Failed to connect"
+                            connectionStatus = "Connecting to $host..."
+                            val ok = socketClient.connect(host, port, pin)
+                            if (ok) {
+                                isConnectedState = true
+                                connectionStatus = "Connected to ${socketClient.peerDeviceName}"
+                            } else {
+                                isConnectedState = false
+                                connectionStatus = "Failed to connect to $host"
+                            }
                         }
                     },
-                    activeHost = activeHost,
-                    activePort = activePort,
-                    connectionStatus = connectionStatus
+                    onDisconnect = {
+                        lifecycleScope.launch {
+                            socketClient.disconnect()
+                            isConnectedState = false
+                            connectionStatus = "Disconnected"
+                        }
+                    }
                 )
             }
         }
@@ -111,6 +234,7 @@ class MainActivity : ComponentActivity() {
         discoveryManager.stopDiscovery()
         socketClient.close()
         androidServer.stop()
+        ForegroundService.stop(this)
     }
 
     private fun checkCameraPermission() {
@@ -118,6 +242,14 @@ class MainActivity : ComponentActivity() {
             this,
             Manifest.permission.CAMERA
         ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun checkNotificationPermission() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
     }
 
     private fun checkClipboard() {

@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import sys
+import time
 import threading
 import pyperclip
 from tkinter import filedialog, messagebox
@@ -124,7 +125,8 @@ class CrossDropApp:
             server=self.server,
             discovery=self.discovery,
             on_send_text=self.send_text_to_peer,
-            on_send_file=self.send_file_to_peer
+            on_send_file=self.send_file_to_peer,
+            on_connect_peer=self.connect_to_peer
         )
 
         # 5. Tray Manager
@@ -177,6 +179,7 @@ class CrossDropApp:
             self.window.update_peer_status("Android Client", ip, 58242, connected=True)
         else:
             if not self.server.active_clients:
+                self.last_known_peer = {"name": "", "ip": "", "port": 58242}
                 self.tray.set_state("listening")
                 self.window.update_peer_status("Listening for Mobile...", "", 0, connected=False)
 
@@ -189,6 +192,7 @@ class CrossDropApp:
 
     def handle_transfer_progress(self, transfer_id: str, received: int, total: int) -> None:
         self.tray.set_state("streaming")
+        self.window.update_progress(transfer_id, received, total)
 
     def handle_transfer_complete(self, transfer_id: str, path: str, success: bool) -> None:
         self.tray.set_state("connected" if self.server.active_clients else "listening")
@@ -224,16 +228,12 @@ class CrossDropApp:
 
     def send_text_to_peer(self, text: str) -> None:
         def _worker():
-            # Dynamically resolve active phone IP if connected
-            ip = self.last_known_peer["ip"]
-            if self.server.active_clients:
-                ip = list(self.server.active_clients.keys())[0].split(":")[0]
-                self.last_known_peer["ip"] = ip
-
-            if not ip or ip in ("127.0.0.1", "0.0.0.0"):
-                self.notifier.notify_info("CrossDrop", "No Android peer connected yet. Open CrossDrop on your phone.")
+            if not self.server.active_clients:
+                self.notifier.notify_info("CrossDrop", "No device connected. Please pair or connect your phone first.")
                 return
 
+            ip = list(self.server.active_clients.keys())[0].split(":")[0]
+            self.last_known_peer = {"name": "Android Client", "ip": ip, "port": 58242}
             port = 58242
             logger.info("Pushing text to mobile peer %s:%d", ip, port)
             future = asyncio.run_coroutine_threadsafe(
@@ -253,31 +253,51 @@ class CrossDropApp:
 
     def send_file_to_peer(self, filepath: str) -> None:
         def _worker():
-            ip = self.last_known_peer["ip"]
-            if self.server.active_clients:
-                ip = list(self.server.active_clients.keys())[0].split(":")[0]
-                self.last_known_peer["ip"] = ip
-
-            if not ip or ip in ("127.0.0.1", "0.0.0.0"):
-                self.notifier.notify_info("CrossDrop", "No Android peer connected yet. Open CrossDrop on your phone.")
-                return
-
-            port = 58242
-            logger.info("Streaming file to mobile peer %s:%d: %s", ip, port, filepath)
-            future = asyncio.run_coroutine_threadsafe(
-                self.server.push_file_to_peer(ip, port, filepath),
-                self.loop
-            )
+            transfer_id = f"out_{int(time.time()*1000)}"
+            fname = os.path.basename(filepath)
             try:
+                if not self.server.active_clients:
+                    self.notifier.notify_info("CrossDrop", "No device connected. Please pair or connect your phone first.")
+                    return
+
+                ip = list(self.server.active_clients.keys())[0].split(":")[0]
+                self.last_known_peer = {"name": "Android Client", "ip": ip, "port": 58242}
+                port = 58242
+                fsize = os.path.getsize(filepath) if os.path.exists(filepath) else 0
+                logger.info("Streaming file to mobile peer %s:%d: %s (%d bytes)", ip, port, fname, fsize)
+
+                # Show outgoing progress bar in QuickWindow
+                self.window.start_outgoing_transfer(transfer_id, fname, fsize)
+
+                def on_progress(sent: int, total: int):
+                    self.tray.set_state("streaming")
+                    self.window.update_outgoing_progress(transfer_id, sent, total)
+
+                future = asyncio.run_coroutine_threadsafe(
+                    self.server.push_file_to_peer(ip, port, filepath, on_progress=on_progress),
+                    self.loop
+                )
                 success = future.result(timeout=600.0)
+                self.tray.set_state("connected" if self.server.active_clients else "listening")
+                self.window.complete_outgoing_transfer(transfer_id, fname, success)
                 if success:
-                    self.notifier.notify_info("CrossDrop", f"File streamed successfully: {os.path.basename(filepath)}")
+                    self.notifier.notify_info("CrossDrop", f"File streamed successfully: {fname}")
                 else:
                     self.notifier.notify_info("CrossDrop", "Transfer declined or interrupted.")
             except Exception as e:
-                logger.error("Error streaming file: %s", e)
+                logger.error("Error streaming file: %s", e, exc_info=True)
+                self.tray.set_state("connected" if self.server.active_clients else "listening")
+                self.window.complete_outgoing_transfer(transfer_id, fname, False, str(e))
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def connect_to_peer(self, host: str, port: int) -> None:
+        """Connect or set target peer manually from UI dialog."""
+        logger.info("Setting target peer manually to %s:%d", host, port)
+        self.last_known_peer = {"name": f"Peer ({host})", "ip": host, "port": port}
+        self.window.update_peer_status(f"Peer ({host})", host, port, connected=True)
+        self.tray.set_state("connected")
+        self.notifier.notify_info("CrossDrop", f"Target peer set to {host}:{port}")
 
     def open_downloads_folder(self) -> None:
         os.startfile(self.server.save_dir)

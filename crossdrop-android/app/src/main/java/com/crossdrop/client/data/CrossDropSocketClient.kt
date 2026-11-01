@@ -1,6 +1,8 @@
 package com.crossdrop.client.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.InputStream
@@ -20,6 +22,16 @@ class CrossDropSocketClient(
 ) {
 
     private var socket: Socket? = null
+    private val socketMutex = Mutex()
+
+    @Volatile
+    var isTransferring: Boolean = false
+        private set
+
+    var sessionKey: ByteArray? = null
+        private set
+    var peerDeviceName: String = "Desktop Workstation"
+        private set
 
     val isConnected: Boolean
         get() = socket?.isConnected == true && socket?.isClosed == false
@@ -32,20 +44,87 @@ class CrossDropSocketClient(
         }
     }
 
-    suspend fun connect(targetHost: String = host, targetPort: Int = port): Boolean = withContext(Dispatchers.IO) {
-        try {
-            close()
-            host = targetHost
-            port = targetPort
-            socket = Socket().apply {
-                tcpNoDelay = true
-                keepAlive = true
-                connect(InetSocketAddress(targetHost, targetPort), 5000)
+    suspend fun connect(targetHost: String = host, targetPort: Int = port, pin: String = ""): Boolean = withContext(Dispatchers.IO) {
+        socketMutex.withLock {
+            try {
+                close()
+                host = targetHost
+                port = targetPort
+                val s = Socket().apply {
+                    tcpNoDelay = true
+                    keepAlive = true
+                    connect(InetSocketAddress(targetHost, targetPort), 5000)
+                }
+                socket = s
+
+                // Perform Ephemeral X25519 Handshake
+                try {
+                    val out = s.getOutputStream()
+                    val inStream = s.getInputStream()
+                    val keyPair = CryptoManager.generateKeyPair()
+                    val rawPub = CryptoManager.publicKeyToRawBytes(keyPair.public)
+
+                    val meta = JSONObject().apply {
+                        put("client_name", android.os.Build.MODEL)
+                        put("pin", pin)
+                    }.toString().toByteArray(Charsets.UTF_8)
+
+                    writeFrame(out, TYPE_HANDSHAKE, meta, rawPub)
+
+                    val resp = readFrameHeader(inStream)
+                    if (resp.msgType == TYPE_HANDSHAKE_ACK) {
+                        val respMetaBytes = if (resp.metaLen > 0) readExactBytes(inStream, resp.metaLen) else ByteArray(0)
+                        val serverPubBytes = readExactBytes(inStream, resp.payloadLen.toInt())
+                        val sharedSecret = CryptoManager.computeSharedSecret(keyPair.private, serverPubBytes)
+                        sessionKey = CryptoManager.deriveSessionKey(sharedSecret, pin)
+
+                        if (respMetaBytes.isNotEmpty()) {
+                            val respJson = JSONObject(String(respMetaBytes, Charsets.UTF_8))
+                            peerDeviceName = respJson.optString("device", "Desktop Workstation")
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                true
+            } catch (e: Exception) {
+                close()
+                false
             }
-            true
+        }
+    }
+
+    suspend fun disconnect() = withContext(Dispatchers.IO) {
+        socketMutex.withLock {
+            try {
+                val out = socket?.getOutputStream()
+                if (out != null && isConnected) {
+                    val meta = JSONObject().apply { put("reason", "USER_DISCONNECT") }.toString().toByteArray(Charsets.UTF_8)
+                    writeFrame(out, TYPE_DISCONNECT, meta, ByteArray(0))
+                }
+            } catch (_: Exception) {}
+            close()
+        }
+    }
+
+    suspend fun sendHeartbeat(): Boolean = withContext(Dispatchers.IO) {
+        if (isTransferring) return@withContext true
+        if (!socketMutex.tryLock()) return@withContext true
+        try {
+            if (!isConnected) return@withContext false
+            val out = socket?.getOutputStream() ?: return@withContext false
+            val inStream = socket?.getInputStream() ?: return@withContext false
+            val meta = JSONObject().apply { put("time", System.currentTimeMillis() / 1000.0) }.toString().toByteArray(Charsets.UTF_8)
+            writeFrame(out, TYPE_PING, meta, ByteArray(0))
+            val header = readFrameHeader(inStream)
+            if (header.metaLen > 0) readExactBytes(inStream, header.metaLen)
+            if (header.payloadLen > 0) readExactBytes(inStream, header.payloadLen.toInt())
+            header.msgType == TYPE_PING
         } catch (e: Exception) {
             close()
             false
+        } finally {
+            socketMutex.unlock()
         }
     }
 
@@ -54,27 +133,36 @@ class CrossDropSocketClient(
             socket?.close()
         } catch (_: Exception) {}
         socket = null
+        sessionKey = null
+        isTransferring = false
     }
 
     suspend fun sendInstantText(text: String): Boolean = withContext(Dispatchers.IO) {
-        try {
-            if (!isConnected) {
-                if (!connect()) return@withContext false
-            }
-            val out = socket?.getOutputStream() ?: return@withContext false
-            val meta = JSONObject().apply {
-                put("id", "text_${System.currentTimeMillis()}")
-                put("type", "TEXT")
-                put("preview", text.take(64))
-                put("time", System.currentTimeMillis() / 1000.0)
-            }.toString().toByteArray(Charsets.UTF_8)
+        socketMutex.withLock {
+            try {
+                if (!isConnected) {
+                    if (!connect()) return@withContext false
+                }
+                val out = socket?.getOutputStream() ?: return@withContext false
+                val meta = JSONObject().apply {
+                    put("id", "text_${System.currentTimeMillis()}")
+                    put("type", "TEXT")
+                    put("preview", text.take(64))
+                    put("time", System.currentTimeMillis() / 1000.0)
+                }.toString().toByteArray(Charsets.UTF_8)
 
-            val payload = text.toByteArray(Charsets.UTF_8)
-            writeFrame(out, TYPE_TEXT, meta, payload)
-            true
-        } catch (e: Exception) {
-            close()
-            false
+                val rawBytes = text.toByteArray(Charsets.UTF_8)
+                val payload = if (sessionKey != null) {
+                    CryptoManager.encryptGcm(sessionKey!!, rawBytes)
+                } else {
+                    rawBytes
+                }
+                writeFrame(out, TYPE_TEXT, meta, payload)
+                true
+            } catch (e: Exception) {
+                close()
+                false
+            }
         }
     }
 
@@ -83,68 +171,78 @@ class CrossDropSocketClient(
         buffer: ByteBuffer,
         onProgress: (bytesSent: Long, totalBytes: Long) -> Unit = { _, _ -> }
     ): Boolean = withContext(Dispatchers.IO) {
-        try {
-            if (!isConnected) {
-                if (!connect()) return@withContext false
+        socketMutex.withLock {
+            isTransferring = true
+            try {
+                if (!isConnected) {
+                    if (!connect()) return@withContext false
+                }
+                val out = socket?.getOutputStream() ?: return@withContext false
+                val inStream = socket?.getInputStream() ?: return@withContext false
+                val totalSize = buffer.remaining().toLong()
+                val transferId = "photo_${System.currentTimeMillis()}"
+
+                val meta = JSONObject().apply {
+                    put("id", transferId)
+                    put("filename", filename)
+                    put("size", totalSize)
+                    put("mime", "image/jpeg")
+                }.toString().toByteArray(Charsets.UTF_8)
+
+                // 1. Send Offer
+                writeFrame(out, TYPE_FILE, meta, ByteArray(0))
+
+                // 2. Await Receiver Response (Wait for accept / reject)
+                val response = readFrameHeader(inStream)
+                if (response.metaLen > 0) {
+                    readExactBytes(inStream, response.metaLen)
+                }
+                if (response.payloadLen > 0) {
+                    readExactBytes(inStream, response.payloadLen.toInt())
+                }
+
+                if (response.msgType != TYPE_ACCEPT) {
+                    return@withContext false
+                }
+
+                // 3. Active-Lock Stream with Running SHA-256 Digest
+                val digest = MessageDigest.getInstance("SHA-256")
+                val chunk = ByteArray(65536)
+                var bytesSent = 0L
+
+                while (buffer.hasRemaining()) {
+                    val toRead = minOf(buffer.remaining(), chunk.size)
+                    buffer.get(chunk, 0, toRead)
+                    out.write(chunk, 0, toRead)
+                    digest.update(chunk, 0, toRead)
+                    bytesSent += toRead
+                    onProgress(bytesSent, totalSize)
+                }
+                out.flush()
+
+                // 4. Send FIN with Checksum
+                val hashHex = digest.digest().joinToString("") { "%02x".format(it) }
+                val finMeta = JSONObject().apply {
+                    put("id", transferId)
+                    put("sha256", hashHex)
+                }.toString().toByteArray(Charsets.UTF_8)
+                writeFrame(out, TYPE_FIN, finMeta, ByteArray(0))
+
+                // 5. Read ACK
+                val ackHeader = readFrameHeader(inStream)
+                if (ackHeader.metaLen > 0) {
+                    readExactBytes(inStream, ackHeader.metaLen)
+                }
+                if (ackHeader.payloadLen > 0) {
+                    readExactBytes(inStream, ackHeader.payloadLen.toInt())
+                }
+                ackHeader.msgType == TYPE_ACK
+            } catch (e: Exception) {
+                close()
+                false
+            } finally {
+                isTransferring = false
             }
-            val out = socket?.getOutputStream() ?: return@withContext false
-            val inStream = socket?.getInputStream() ?: return@withContext false
-            val totalSize = buffer.remaining().toLong()
-            val transferId = "photo_${System.currentTimeMillis()}"
-
-            val meta = JSONObject().apply {
-                put("id", transferId)
-                put("filename", filename)
-                put("size", totalSize)
-                put("mime", "image/jpeg")
-            }.toString().toByteArray(Charsets.UTF_8)
-
-            // 1. Send Offer
-            writeFrame(out, TYPE_FILE, meta, ByteArray(0))
-
-            // 2. Await Receiver Response (Wait for accept / reject)
-            val response = readFrameHeader(inStream)
-            // Consume metadata if any
-            if (response.metaLen > 0) {
-                readExactBytes(inStream, response.metaLen)
-            }
-
-            if (response.msgType != TYPE_ACCEPT) {
-                return@withContext false
-            }
-
-            // 3. Active-Lock Stream with Running SHA-256 Digest
-            val digest = MessageDigest.getInstance("SHA-256")
-            val chunk = ByteArray(65536)
-            var bytesSent = 0L
-
-            while (buffer.hasRemaining()) {
-                val toRead = minOf(buffer.remaining(), chunk.size)
-                buffer.get(chunk, 0, toRead)
-                out.write(chunk, 0, toRead)
-                digest.update(chunk, 0, toRead)
-                bytesSent += toRead
-                onProgress(bytesSent, totalSize)
-            }
-            out.flush()
-
-            // 4. Send FIN with Checksum
-            val hashHex = digest.digest().joinToString("") { "%02x".format(it) }
-            val finMeta = JSONObject().apply {
-                put("id", transferId)
-                put("sha256", hashHex)
-            }.toString().toByteArray(Charsets.UTF_8)
-            writeFrame(out, TYPE_FIN, finMeta, ByteArray(0))
-
-            // 5. Read ACK
-            val ackHeader = readFrameHeader(inStream)
-            if (ackHeader.metaLen > 0) {
-                readExactBytes(inStream, ackHeader.metaLen)
-            }
-            ackHeader.msgType == TYPE_ACK
-        } catch (e: Exception) {
-            close()
-            false
         }
     }
 
@@ -154,68 +252,79 @@ class CrossDropSocketClient(
         inputStream: InputStream,
         onProgress: (bytesSent: Long, totalBytes: Long) -> Unit = { _, _ -> }
     ): Boolean = withContext(Dispatchers.IO) {
-        try {
-            if (!isConnected) {
-                if (!connect()) return@withContext false
-            }
-            val out = socket?.getOutputStream() ?: return@withContext false
-            val inStream = socket?.getInputStream() ?: return@withContext false
-            val transferId = "file_${System.currentTimeMillis()}"
-
-            val meta = JSONObject().apply {
-                put("id", transferId)
-                put("filename", filename)
-                put("size", totalSize)
-            }.toString().toByteArray(Charsets.UTF_8)
-
-            // 1. Send Offer
-            writeFrame(out, TYPE_FILE, meta, ByteArray(0))
-
-            // 2. Await Response
-            val response = readFrameHeader(inStream)
-            if (response.metaLen > 0) {
-                readExactBytes(inStream, response.metaLen)
-            }
-
-            if (response.msgType != TYPE_ACCEPT) {
-                return@withContext false
-            }
-
-            // 3. Stream 64KB Chunks with SHA-256
-            val digest = MessageDigest.getInstance("SHA-256")
-            val chunk = ByteArray(65536)
-            var bytesSent = 0L
-
-            inputStream.use { stream ->
-                while (bytesSent < totalSize) {
-                    val toRead = minOf(chunk.size.toLong(), totalSize - bytesSent).toInt()
-                    val read = stream.read(chunk, 0, toRead)
-                    if (read == -1) break
-                    out.write(chunk, 0, read)
-                    digest.update(chunk, 0, read)
-                    bytesSent += read
-                    onProgress(bytesSent, totalSize)
+        socketMutex.withLock {
+            isTransferring = true
+            try {
+                if (!isConnected) {
+                    if (!connect()) return@withContext false
                 }
-            }
-            out.flush()
+                val out = socket?.getOutputStream() ?: return@withContext false
+                val inStream = socket?.getInputStream() ?: return@withContext false
+                val transferId = "file_${System.currentTimeMillis()}"
 
-            // 4. Send FIN with Checksum
-            val hashHex = digest.digest().joinToString("") { "%02x".format(it) }
-            val finMeta = JSONObject().apply {
-                put("id", transferId)
-                put("sha256", hashHex)
-            }.toString().toByteArray(Charsets.UTF_8)
-            writeFrame(out, TYPE_FIN, finMeta, ByteArray(0))
+                val meta = JSONObject().apply {
+                    put("id", transferId)
+                    put("filename", filename)
+                    put("size", totalSize)
+                }.toString().toByteArray(Charsets.UTF_8)
 
-            // 5. Read ACK
-            val ackHeader = readFrameHeader(inStream)
-            if (ackHeader.metaLen > 0) {
-                readExactBytes(inStream, ackHeader.metaLen)
+                // 1. Send Offer
+                writeFrame(out, TYPE_FILE, meta, ByteArray(0))
+
+                // 2. Await Response
+                val response = readFrameHeader(inStream)
+                if (response.metaLen > 0) {
+                    readExactBytes(inStream, response.metaLen)
+                }
+                if (response.payloadLen > 0) {
+                    readExactBytes(inStream, response.payloadLen.toInt())
+                }
+
+                if (response.msgType != TYPE_ACCEPT) {
+                    return@withContext false
+                }
+
+                // 3. Stream 64KB Chunks with SHA-256
+                val digest = MessageDigest.getInstance("SHA-256")
+                val chunk = ByteArray(65536)
+                var bytesSent = 0L
+
+                inputStream.use { stream ->
+                    while (bytesSent < totalSize) {
+                        val toRead = minOf(chunk.size.toLong(), totalSize - bytesSent).toInt()
+                        val read = stream.read(chunk, 0, toRead)
+                        if (read == -1) break
+                        out.write(chunk, 0, read)
+                        digest.update(chunk, 0, read)
+                        bytesSent += read
+                        onProgress(bytesSent, totalSize)
+                    }
+                }
+                out.flush()
+
+                // 4. Send FIN with Checksum
+                val hashHex = digest.digest().joinToString("") { "%02x".format(it) }
+                val finMeta = JSONObject().apply {
+                    put("id", transferId)
+                    put("sha256", hashHex)
+                }.toString().toByteArray(Charsets.UTF_8)
+                writeFrame(out, TYPE_FIN, finMeta, ByteArray(0))
+
+                // 5. Read ACK
+                val ackHeader = readFrameHeader(inStream)
+                if (ackHeader.metaLen > 0) {
+                    readExactBytes(inStream, ackHeader.metaLen)
+                }
+                if (ackHeader.payloadLen > 0) {
+                    readExactBytes(inStream, ackHeader.payloadLen.toInt())
+                }
+                ackHeader.msgType == TYPE_ACK
+            } catch (e: Exception) {
+                close()
+                false
+            } finally {
+                isTransferring = false
             }
-            ackHeader.msgType == TYPE_ACK
-        } catch (e: Exception) {
-            close()
-            false
         }
     }
 
@@ -271,5 +380,8 @@ class CrossDropSocketClient(
         const val TYPE_CHUNK: Short = 0x0006
         const val TYPE_FIN: Short = 0x0007
         const val TYPE_ACK: Short = 0x0008
+        const val TYPE_HANDSHAKE: Short = 0x0009
+        const val TYPE_HANDSHAKE_ACK: Short = 0x000A
+        const val TYPE_DISCONNECT: Short = 0x000B
     }
 }

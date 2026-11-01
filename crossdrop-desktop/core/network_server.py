@@ -9,11 +9,35 @@ import hashlib
 import json
 import logging
 import os
+import socket
 import struct
 import time
 from typing import Dict, Optional, Callable, Any
 import pyperclip
-from .crypto import zero_memory
+from .crypto import (
+    zero_memory,
+    generate_pairing_pin,
+    generate_pairing_token,
+    generate_x25519_keypair,
+    derive_shared_secret,
+    derive_session_key,
+    encrypt_gcm,
+    decrypt_gcm
+)
+
+def get_lan_ip() -> str:
+    """Detect active local network IP address."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except Exception:
+            return "127.0.0.1"
 
 logger = logging.getLogger("CrossDrop.Server")
 
@@ -28,6 +52,9 @@ TYPE_REJECT = 0x0005
 TYPE_CHUNK = 0x0006
 TYPE_FIN = 0x0007
 TYPE_ACK = 0x0008
+TYPE_HANDSHAKE = 0x0009
+TYPE_HANDSHAKE_ACK = 0x000A
+TYPE_DISCONNECT = 0x000B
 
 HEADER_STRUCT = "!4sHIQ"
 HEADER_SIZE = 18  # 4 + 2 + 4 + 8 = 18 bytes
@@ -44,8 +71,15 @@ class PendingTransfer:
         self.accepted = False
         self.rejected = False
         self.accept_event = asyncio.Event()
+        self.state = "PENDING"  # PENDING, DOWNLOADING, COMPLETED, REJECTED
+        self.progress = 0.0
+        self.bytes_transferred = 0
+        self.total_bytes = metadata.get("size", 0)
+        self.timer_stopped = False
 
     def remaining_ttl(self) -> int:
+        if self.timer_stopped or self.state in ("DOWNLOADING", "COMPLETED", "REJECTED"):
+            return 0
         elapsed = time.time() - self.created_at
         return max(0, int(self.ttl - elapsed))
 
@@ -80,6 +114,12 @@ class CrossDropServer:
         self.pending_offers: Dict[str, PendingTransfer] = {}
         self.server: Optional[asyncio.Server] = None
         self.active_clients: Dict[str, asyncio.StreamWriter] = {}
+        self.client_sessions: Dict[str, bytes] = {}
+        self.client_names: Dict[str, str] = {}
+        self.pairing_pin: str = generate_pairing_pin()
+        self.pairing_psk: str = generate_pairing_token()
+        self.private_key, self.public_key_bytes = generate_x25519_keypair()
+        self.device_name: str = "Windows 11 Workstation"
         self.running = False
         self.loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -139,6 +179,17 @@ class CrossDropServer:
                     writer.close()
                     break
 
+                # Memory DoS prevention: enforce strict boundary on metadata and payload lengths
+                if meta_len > 1_048_576 or meta_len < 0:
+                    logger.warning("Metadata length exceeds 1MB limit (%d bytes) from %s; dropping.", meta_len, client_id)
+                    writer.close()
+                    break
+
+                if msg_type == TYPE_TEXT and (payload_len > 52_428_800 or payload_len < 0):
+                    logger.warning("Text payload length exceeds 50MB limit (%d bytes) from %s; dropping.", payload_len, client_id)
+                    writer.close()
+                    break
+
                 meta_bytes = await reader.readexactly(meta_len)
                 metadata = json.loads(meta_bytes.decode("utf-8"))
                 transfer_id = metadata.get("id", str(time.time()))
@@ -147,8 +198,42 @@ class CrossDropServer:
                     self.send_frame(writer, TYPE_PING, {"status": "PONG", "time": time.time()})
                     await writer.drain()
 
+                elif msg_type == TYPE_HANDSHAKE:
+                    payload = await reader.readexactly(payload_len)
+                    if len(payload) == 32:
+                        client_pub = bytes(payload)
+                        shared_secret = derive_shared_secret(self.private_key, client_pub)
+                        pin = str(metadata.get("pin", ""))
+                        session_key = derive_session_key(shared_secret, pin)
+                        self.client_sessions[client_id] = session_key
+                        if peer_addr:
+                            self.client_sessions[peer_addr[0]] = session_key
+                        client_name = metadata.get("client_name", "Android Device")
+                        self.client_names[client_id] = client_name
+                        logger.info("X25519 Handshake complete with %s (%s). Session key established.", client_id, client_name)
+                        # Reply with server's 32-byte raw public key
+                        self.send_frame(writer, TYPE_HANDSHAKE_ACK, {
+                            "status": "OK",
+                            "device": self.device_name
+                        }, self.public_key_bytes)
+                        await writer.drain()
+                        if self.on_connection_change:
+                            self.on_connection_change(client_id, True)
+                    else:
+                        logger.warning("Invalid handshake payload length (%d bytes) from %s", len(payload), client_id)
+
+                elif msg_type == TYPE_DISCONNECT:
+                    logger.info("Peer %s requested disconnect.", client_id)
+                    break
+
                 elif msg_type == TYPE_TEXT:
                     payload = await reader.readexactly(payload_len)
+                    # Attempt AES-256-GCM decryption if session established
+                    if client_id in self.client_sessions and len(payload) >= 28:
+                        try:
+                            payload = decrypt_gcm(self.client_sessions[client_id], bytes(payload))
+                        except Exception as e:
+                            logger.debug("Decryption fallback (plain payload?): %s", e)
                     mutable_buf = bytearray(payload)
                     transfer = PendingTransfer(transfer_id, msg_type, metadata, mutable_buf)
                     self.pending_offers[transfer_id] = transfer
@@ -244,6 +329,8 @@ class CrossDropServer:
         if transfer_id in self.pending_offers:
             item = self.pending_offers[transfer_id]
             item.accepted = True
+            item.timer_stopped = True
+            item.state = "DOWNLOADING"
             if self.loop and self.loop.is_running():
                 self.loop.call_soon_threadsafe(item.accept_event.set)
             else:
@@ -256,6 +343,8 @@ class CrossDropServer:
         if transfer_id in self.pending_offers:
             item = self.pending_offers[transfer_id]
             item.rejected = True
+            item.timer_stopped = True
+            item.state = "REJECTED"
             item.purge_memory()
             if self.loop and self.loop.is_running():
                 self.loop.call_soon_threadsafe(item.accept_event.set)
@@ -286,10 +375,19 @@ class CrossDropServer:
         metadata: dict,
         transfer_id: str
     ) -> None:
-        filename = metadata.get("filename", f"transfer_{int(time.time())}.bin")
-        # Sanitize filename
-        safe_name = os.path.basename(filename)
-        target_path = os.path.join(self.save_dir, safe_name)
+        raw_name = metadata.get("filename", f"transfer_{int(time.time())}.bin")
+        # Strict filename sanitization: strip directory separators, null bytes, and path traversal sequences
+        safe_name = os.path.basename(raw_name.replace("\\", "/")).replace("\x00", "").strip()
+        if not safe_name or safe_name in (".", ".."):
+            safe_name = f"transfer_{int(time.time())}.bin"
+
+        target_path = os.path.abspath(os.path.join(self.save_dir, safe_name))
+        save_dir_abs = os.path.abspath(self.save_dir)
+
+        # Path traversal guard: ensure target file remains inside save_dir
+        if not target_path.startswith(save_dir_abs):
+            logger.error("Path traversal attempt detected from %s for filename: %s", transfer_id, raw_name)
+            raise PermissionError("Path traversal outside save directory rejected.")
         total_size = metadata.get("size", 0)
         bytes_received = 0
         hasher = hashlib.sha256()
@@ -306,6 +404,10 @@ class CrossDropServer:
                     f.write(chunk)
                     hasher.update(chunk)
                     bytes_received += len(chunk)
+                    if transfer_id in self.pending_offers:
+                        item = self.pending_offers[transfer_id]
+                        item.bytes_transferred = bytes_received
+                        item.progress = (bytes_received / total_size) if total_size > 0 else 0.0
                     if self.on_transfer_progress:
                         self.on_transfer_progress(transfer_id, bytes_received, total_size)
 
@@ -319,12 +421,17 @@ class CrossDropServer:
 
             if computed_sha.lower() == expected_sha.lower():
                 logger.info("SHA-256 match (%s). Transfer complete.", computed_sha)
+                if transfer_id in self.pending_offers:
+                    self.pending_offers[transfer_id].state = "COMPLETED"
+                    self.pending_offers[transfer_id].progress = 1.0
                 self.send_frame(writer, TYPE_ACK, {"id": transfer_id, "status": "SUCCESS", "sha256": computed_sha})
                 await writer.drain()
                 if self.on_transfer_complete:
                     self.on_transfer_complete(transfer_id, target_path, True)
             else:
                 logger.error("SHA-256 mismatch! Received: %s, Computed: %s", expected_sha, computed_sha)
+                if transfer_id in self.pending_offers:
+                    self.pending_offers[transfer_id].state = "REJECTED"
                 if os.path.exists(target_path):
                     os.remove(target_path)
                 self.send_frame(writer, TYPE_REJECT, {"id": transfer_id, "status": "INTEGRITY_FAIL"})
@@ -334,12 +441,34 @@ class CrossDropServer:
 
         except Exception as e:
             logger.error("File stream failed: %s", e)
+            if transfer_id in self.pending_offers:
+                self.pending_offers[transfer_id].state = "REJECTED"
             if os.path.exists(target_path):
                 os.remove(target_path)
             self.send_frame(writer, TYPE_REJECT, {"id": transfer_id, "reason": str(e)})
             await writer.drain()
             if self.on_transfer_complete:
                 self.on_transfer_complete(transfer_id, target_path, False)
+
+    def disconnect_peer(self) -> None:
+        """Gracefully disconnect all active peers."""
+        if self.loop and self.loop.is_running():
+            asyncio.run_coroutine_threadsafe(self._disconnect_all(), self.loop)
+
+    async def _disconnect_all(self) -> None:
+        for cid, writer in list(self.active_clients.items()):
+            try:
+                if not writer.is_closing():
+                    self.send_frame(writer, TYPE_DISCONNECT, {"reason": "USER_DISCONNECT"})
+                    await writer.drain()
+                    writer.close()
+            except Exception:
+                pass
+        self.active_clients.clear()
+        self.client_sessions.clear()
+        self.client_names.clear()
+        if self.on_connection_change:
+            self.on_connection_change("", False)
 
     async def push_text_to_peer(self, host: str, port: int, text: str) -> bool:
         """Push a text snippet to a remote CrossDrop peer (default mobile port 58242)."""
@@ -353,13 +482,29 @@ class CrossDropServer:
                 asyncio.open_connection(host, target_port),
                 timeout=5.0
             )
+            # Encrypt with session key if paired
+            session_key = self.client_sessions.get(host)
+            if not session_key:
+                for cid, sk in self.client_sessions.items():
+                    if host in cid:
+                        session_key = sk
+                        break
+
+            payload = text.encode("utf-8")
+            if session_key:
+                try:
+                    payload = encrypt_gcm(session_key, payload)
+                except Exception as e:
+                    logger.debug("Encryption exception, using plain payload: %s", e)
+
             meta = {
                 "id": f"text_{int(time.time()*1000)}",
                 "type": "TEXT",
                 "preview": text[:64],
                 "time": time.time(),
+                "encrypted": session_key is not None,
             }
-            payload = text.encode("utf-8")
+
             self.send_frame(writer, TYPE_TEXT, meta, payload)
             await writer.drain()
             writer.close()
@@ -406,8 +551,8 @@ class CrossDropServer:
             self.send_frame(writer, TYPE_FILE, meta)
             await writer.drain()
 
-            # 2. Await Peer Acceptance
-            header = await asyncio.wait_for(reader.readexactly(HEADER_SIZE), timeout=15.0)
+            # 2. Await Peer Acceptance (give user up to 5 minutes to accept on mobile)
+            header = await asyncio.wait_for(reader.readexactly(HEADER_SIZE), timeout=300.0)
             _, msg_type, meta_len, _ = struct.unpack(HEADER_STRUCT, header)
             if meta_len > 0:
                 await reader.readexactly(meta_len)

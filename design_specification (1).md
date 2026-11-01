@@ -1,13 +1,13 @@
 # CrossDrop UI/UX Design System Specification
 **Document:** `design.md`  
 **Target:** Desktop (Windows 11) & Mobile (Android 14 / Compose)  
-**Tone & Persona:** Utilitarian, tactile, engineered, quiet utility (Anti-"Vibecoded")
+**Tone & Persona:** Utilitarian, tactile, engineered, quiet utility
 
 ---
 
-## 1. Aesthetic Thesis & The Anti-"Vibecoded" Standard
+## 1. Aesthetic Thesis & Design Standard
 
-### 1.1 What to Avoid ("Vibecoded" Pitfalls)
+### 1.1 What to Avoid (Design Pitfalls)
 - **No decorative frosted glass / heavy blur overkill:** Excessive `backdrop-blur-3xl` layered everywhere with noisy shadows.
 - **No novelty neon/mesh radial gradients:** No purple-to-cyan or pink-to-orange glow cards that serve no informational hierarchy.
 - **No hyperactive physics animations:** Spring bobs, bouncy layout shifts, or pulsing glow borders around static buttons.
@@ -265,7 +265,7 @@ QLabel.Timer {
 
 ---
 
-## 7. Review Checklist: Anti-"Vibecode" Verification
+## 7. Review Checklist: Design Verification
 
 - [x] **No gratuitous glassmorphism:** Surfaces are solid `#0E1116` / `#161B22` with clear borders instead of noisy blurs.
 - [x] **Information-dense hierarchy:** Every element on screen communicates either device connectivity, incoming payload size, or remaining TTL.
