@@ -17,7 +17,7 @@ import json
 import pyperclip
 import qrcode
 from PIL import Image, ImageTk
-from typing import Optional, Callable
+from typing import Optional, Callable, List, Any
 from core.network_server import get_lan_ip
 
 # Design Tokens (design.md)

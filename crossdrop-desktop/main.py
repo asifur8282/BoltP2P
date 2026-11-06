@@ -4,7 +4,7 @@ Coordinates async network server, mDNS discovery, Windows 11 notifications,
 system tray icon, and the 460x600 quick utility window.
 """
 
-from typing import Optional
+from typing import Optional, List, Union
 import asyncio
 import json
 import logging
