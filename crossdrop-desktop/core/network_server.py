@@ -96,6 +96,7 @@ class CrossDropServer:
         port: int = 58241,
         save_dir: str = "./Downloads",
         auto_accept_text: bool = False,
+        auto_accept_files: bool = False,
         on_notify: Optional[Callable[[str, str, str, dict], None]] = None,
         on_transfer_progress: Optional[Callable[[str, int, int], None]] = None,
         on_transfer_complete: Optional[Callable[[str, str, bool], None]] = None,
@@ -106,6 +107,7 @@ class CrossDropServer:
         self.save_dir = os.path.abspath(save_dir)
         os.makedirs(self.save_dir, exist_ok=True)
         self.auto_accept_text = auto_accept_text
+        self.auto_accept_files = auto_accept_files
         self.on_notify = on_notify
         self.on_transfer_progress = on_transfer_progress
         self.on_transfer_complete = on_transfer_complete
@@ -265,11 +267,15 @@ class CrossDropServer:
                     if self.on_notify:
                         self.on_notify(transfer_id, "FILE", f"{filename} ({size} bytes)", metadata)
 
-                    # Await user consent or TTL expiry
-                    try:
-                        await asyncio.wait_for(transfer.accept_event.wait(), timeout=600.0)
-                    except asyncio.TimeoutError:
-                        transfer.rejected = True
+                    if self.auto_accept_files:
+                        transfer.accepted = True
+                        transfer.accept_event.set()
+                    else:
+                        # Await user consent or TTL expiry
+                        try:
+                            await asyncio.wait_for(transfer.accept_event.wait(), timeout=600.0)
+                        except asyncio.TimeoutError:
+                            transfer.rejected = True
 
                     if transfer_id not in self.pending_offers or transfer.rejected:
                         self.send_frame(writer, TYPE_REJECT, {"id": transfer_id, "reason": "REJECTED_OR_EXPIRED"})

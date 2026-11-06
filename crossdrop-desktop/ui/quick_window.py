@@ -45,11 +45,13 @@ class QuickWindow:
         discovery,
         on_send_text: Optional[Callable[[str], None]] = None,
         on_send_file: Optional[Callable[[str], None]] = None,
+        on_send_files: Optional[Callable[[List[str]], None]] = None,
         on_connect_peer: Optional[Callable[[str, int], None]] = None
     ):
         self.server = server
         self.discovery = discovery
         self.on_send_text = on_send_text
+        self.on_send_files = on_send_files or (lambda fl: [on_send_file(f) for f in fl] if on_send_file else None)
         self.on_send_file = on_send_file
         self.on_connect_peer = on_connect_peer
 
@@ -60,6 +62,7 @@ class QuickWindow:
         self.text_input: Optional[tk.Text] = None
         self.offers_frame: Optional[tk.Frame] = None
         self.auto_accept_var: Optional[tk.BooleanVar] = None
+        self.auto_accept_files_var: Optional[tk.BooleanVar] = None
         self.peer_target = "127.0.0.1"
         self.peer_port = 58241
         self.peer_name = "Listening for Mobile..."
@@ -323,7 +326,7 @@ class QuickWindow:
 
         file_btn = tk.Button(
             btn_row,
-            text="Select & Stream File",
+            text="Select & Stream Files",
             bg=COLOR_SURFACE_2,
             fg=COLOR_TEXT_PRIMARY,
             activebackground=COLOR_BORDER,
@@ -395,6 +398,21 @@ class QuickWindow:
         bottom_bar = tk.Frame(self.root, bg=COLOR_SURFACE_1, height=36, highlightbackground=COLOR_BORDER, highlightthickness=1)
         bottom_bar.pack(fill="x", padx=10, pady=(6, 10))
 
+        self.auto_accept_files_var = tk.BooleanVar(value=getattr(self.server, "auto_accept_files", False))
+        chk_files = tk.Checkbutton(
+            bottom_bar,
+            text="Auto-Accept Files",
+            variable=self.auto_accept_files_var,
+            command=self._toggle_auto_accept_files,
+            bg=COLOR_SURFACE_1,
+            fg=COLOR_TEXT_SECONDARY,
+            selectcolor=COLOR_SURFACE_0,
+            activebackground=COLOR_SURFACE_1,
+            activeforeground=COLOR_TEXT_PRIMARY,
+            font=FONT_SANS
+        )
+        chk_files.pack(side="right", padx=(4, 8), pady=4)
+
         self.auto_accept_var = tk.BooleanVar(value=self.server.auto_accept_text)
         chk = tk.Checkbutton(
             bottom_bar,
@@ -408,7 +426,7 @@ class QuickWindow:
             activeforeground=COLOR_TEXT_PRIMARY,
             font=FONT_SANS
         )
-        chk.pack(side="right", padx=8, pady=4)
+        chk.pack(side="right", padx=4, pady=4)
 
         open_folder_btn = tk.Button(
             bottom_bar,
@@ -430,7 +448,12 @@ class QuickWindow:
             self.text_input.delete("1.0", "end")
 
     def _toggle_auto_accept(self) -> None:
-        self.server.auto_accept_text = self.auto_accept_var.get()
+        if self.server and self.auto_accept_var:
+            self.server.auto_accept_text = self.auto_accept_var.get()
+
+    def _toggle_auto_accept_files(self) -> None:
+        if self.server and self.auto_accept_files_var:
+            self.server.auto_accept_files = self.auto_accept_files_var.get()
 
     def _open_downloads_folder(self) -> None:
         import os
@@ -477,9 +500,14 @@ class QuickWindow:
                 self.text_input.delete("1.0", "end")
 
     def _handle_select_file(self) -> None:
-        filename = filedialog.askopenfilename(title="Select File to Stream")
-        if filename and self.on_send_file:
-            self.on_send_file(filename)
+        filenames = filedialog.askopenfilenames(title="Select File(s) to Stream")
+        if filenames:
+            file_list = list(filenames)
+            if self.on_send_files:
+                self.on_send_files(file_list)
+            elif self.on_send_file:
+                for f in file_list:
+                    self.on_send_file(f)
 
     def refresh_offers_ui(self) -> None:
         """Re-render pending RAM transfer offers with remaining TTL."""
@@ -713,6 +741,18 @@ class QuickWindow:
 
                     tk.Button(
                         btn_f,
+                        text="Accept All",
+                        bg=COLOR_SURFACE_2,
+                        fg=COLOR_ACCENT,
+                        font=FONT_SANS,
+                        relief="flat",
+                        padx=6,
+                        pady=2,
+                        command=lambda tid=offer.transfer_id: self._accept_all_files(tid)
+                    ).pack(side="left", padx=(0, 4))
+
+                    tk.Button(
+                        btn_f,
                         text="Reject",
                         bg=COLOR_SURFACE_2,
                         fg=COLOR_DANGER,
@@ -735,6 +775,13 @@ class QuickWindow:
     def _accept_file(self, transfer_id: str) -> None:
         self.server.accept_transfer(transfer_id)
         self.refresh_offers_ui()
+
+    def _accept_all_files(self, transfer_id: str) -> None:
+        if self.server:
+            self.server.auto_accept_files = True
+        if self.auto_accept_files_var:
+            self.auto_accept_files_var.set(True)
+        self._accept_file(transfer_id)
 
     def _reject_offer(self, transfer_id: str) -> None:
         self.server.reject_transfer(transfer_id)

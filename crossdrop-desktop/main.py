@@ -126,6 +126,7 @@ class CrossDropApp:
             discovery=self.discovery,
             on_send_text=self.send_text_to_peer,
             on_send_file=self.send_file_to_peer,
+            on_send_files=self.send_files_to_peer,
             on_connect_peer=self.connect_to_peer
         )
 
@@ -252,9 +253,15 @@ class CrossDropApp:
         threading.Thread(target=_worker, daemon=True).start()
 
     def send_file_to_peer(self, filepath: str) -> None:
+        self.send_files_to_peer([filepath])
+
+    def send_files_to_peer(self, filepaths: Union[str, List[str]]) -> None:
+        if isinstance(filepaths, str):
+            filepaths = [filepaths]
+        if not filepaths:
+            return
+
         def _worker():
-            transfer_id = f"out_{int(time.time()*1000)}"
-            fname = os.path.basename(filepath)
             try:
                 if not self.server.active_clients:
                     self.notifier.notify_info("CrossDrop", "No device connected. Please pair or connect your phone first.")
@@ -263,31 +270,52 @@ class CrossDropApp:
                 ip = list(self.server.active_clients.keys())[0].split(":")[0]
                 self.last_known_peer = {"name": "Android Client", "ip": ip, "port": 58242}
                 port = 58242
-                fsize = os.path.getsize(filepath) if os.path.exists(filepath) else 0
-                logger.info("Streaming file to mobile peer %s:%d: %s (%d bytes)", ip, port, fname, fsize)
+                total_files = len(filepaths)
+                success_count = 0
 
-                # Show outgoing progress bar in QuickWindow
-                self.window.start_outgoing_transfer(transfer_id, fname, fsize)
+                for idx, filepath in enumerate(filepaths, 1):
+                    if not os.path.exists(filepath):
+                        continue
+                    transfer_id = f"out_{int(time.time()*1000)}_{idx}"
+                    fname = os.path.basename(filepath)
+                    fsize = os.path.getsize(filepath)
+                    display_name = f"[{idx}/{total_files}] {fname}" if total_files > 1 else fname
+                    logger.info("Streaming file %d/%d to mobile peer %s:%d: %s (%d bytes)", idx, total_files, ip, port, fname, fsize)
 
-                def on_progress(sent: int, total: int):
-                    self.tray.set_state("streaming")
-                    self.window.update_outgoing_progress(transfer_id, sent, total)
+                    # Show outgoing progress bar in QuickWindow
+                    self.window.start_outgoing_transfer(transfer_id, display_name, fsize)
 
-                future = asyncio.run_coroutine_threadsafe(
-                    self.server.push_file_to_peer(ip, port, filepath, on_progress=on_progress),
-                    self.loop
-                )
-                success = future.result(timeout=600.0)
-                self.tray.set_state("connected" if self.server.active_clients else "listening")
-                self.window.complete_outgoing_transfer(transfer_id, fname, success)
-                if success:
-                    self.notifier.notify_info("CrossDrop", f"File streamed successfully: {fname}")
-                else:
-                    self.notifier.notify_info("CrossDrop", "Transfer declined or interrupted.")
+                    def on_progress(sent: int, total: int):
+                        self.tray.set_state("streaming")
+                        self.window.update_outgoing_progress(transfer_id, sent, total)
+
+                    future = asyncio.run_coroutine_threadsafe(
+                        self.server.push_file_to_peer(ip, port, filepath, on_progress=on_progress),
+                        self.loop
+                    )
+                    success = future.result(timeout=600.0)
+                    self.tray.set_state("connected" if self.server.active_clients else "listening")
+                    self.window.complete_outgoing_transfer(transfer_id, display_name, success)
+                    if success:
+                        success_count += 1
+                    else:
+                        self.notifier.notify_info("CrossDrop", f"Transfer declined or interrupted for {fname}.")
+                        break
+
+                    time.sleep(0.15)  # brief socket settle delay between sequential files
+
+                if total_files > 1:
+                    if success_count == total_files:
+                        self.notifier.notify_info("CrossDrop", f"All {total_files} files streamed successfully.")
+                    else:
+                        self.notifier.notify_info("CrossDrop", f"Streamed {success_count} of {total_files} files.")
+                elif success_count == 1:
+                    self.notifier.notify_info("CrossDrop", f"File streamed successfully: {os.path.basename(filepaths[0])}")
+
             except Exception as e:
                 logger.error("Error streaming file: %s", e, exc_info=True)
                 self.tray.set_state("connected" if self.server.active_clients else "listening")
-                self.window.complete_outgoing_transfer(transfer_id, fname, False, str(e))
+                self.window.complete_outgoing_transfer(f"err_{int(time.time())}", "Batch Transfer", False, str(e))
 
         threading.Thread(target=_worker, daemon=True).start()
 

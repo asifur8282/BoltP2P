@@ -140,6 +140,7 @@ fun MainScreen(
     downloadFileName: String = "",
     downloadStatusText: String = "",
     onAcceptOffer: (String) -> Unit,
+    onAcceptAllOffers: (String) -> Unit = {},
     onRejectOffer: (String) -> Unit,
     onConnect: (String, Int, String) -> Unit,
     onDisconnect: () -> Unit,
@@ -168,57 +169,74 @@ fun MainScreen(
     var isStreaming by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("") }
 
-    // File picker launcher with Fix 2 (Single synchronous cursor query)
+    // File picker launcher supporting single or multiple file selection
     val filePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
             coroutineScope.launch {
                 isStreaming = true
-                statusMessage = "Streaming file to PC..."
+                val totalCount = uris.size
+                var successCount = 0
+                val contentResolver = context.contentResolver
                 try {
-                    val contentResolver = context.contentResolver
-                    var filename = "transfer.bin"
-                    var size = -1L
+                    for ((index, uri) in uris.withIndex()) {
+                        val fileNum = index + 1
+                        var filename = "transfer_$fileNum.bin"
+                        var size = -1L
 
-                    // Fix 2: Single cursor query block; immediately closed to avoid cursor out-of-bounds crash
-                    contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                        if (cursor.moveToFirst()) {
-                            val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                            if (nameIdx >= 0) filename = cursor.getString(nameIdx)
-                            val sizeIdx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
-                            if (sizeIdx >= 0) size = cursor.getLong(sizeIdx)
-                        }
-                    }
-
-                    if (size <= 0) {
-                        try {
-                            contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                                size = pfd.statSize
+                        // Fix 2: Single cursor query block; immediately closed to avoid cursor out-of-bounds crash
+                        contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                                if (nameIdx >= 0) filename = cursor.getString(nameIdx)
+                                val sizeIdx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                                if (sizeIdx >= 0) size = cursor.getLong(sizeIdx)
                             }
-                        } catch (_: Exception) {}
-                    }
+                        }
 
-                    val inStream = contentResolver.openInputStream(uri)
-                    if (inStream != null) {
-                        val realSize = if (size > 0) size else inStream.available().toLong()
-                        val success = socketClient.streamInputStream(filename, realSize, inStream) { sent, total ->
-                            transferProgress = if (total > 0) sent.toFloat() / total.toFloat() else 0.5f
+                        if (size <= 0) {
+                            try {
+                                contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                                    size = pfd.statSize
+                                }
+                            } catch (_: Exception) {}
                         }
-                        if (success) {
-                            val sizeStr = if (realSize > 1024 * 1024) "%.2f MB".format(realSize / (1024f * 1024f)) else "%.1f KB".format(realSize / 1024f)
-                            sharedHistory.add(0, SessionSharedItem(
-                                id = java.util.UUID.randomUUID().toString(),
-                                title = filename,
-                                subtitle = "Streamed to PC ($sizeStr) • Tap to View",
-                                isOutgoing = true,
-                                type = "FILE",
-                                uriString = uri.toString()
-                            ))
-                            statusMessage = "File sent & verified!"
-                        } else {
-                            statusMessage = "Transfer failed or declined."
+
+                        val inStream = contentResolver.openInputStream(uri)
+                        if (inStream != null) {
+                            val realSize = if (size > 0) size else inStream.available().toLong()
+                            statusMessage = if (totalCount > 1) {
+                                "Streaming [$fileNum/$totalCount] $filename..."
+                            } else {
+                                "Streaming $filename to PC..."
+                            }
+                            transferProgress = 0f
+
+                            val success = socketClient.streamInputStream(filename, realSize, inStream) { sent, total ->
+                                transferProgress = if (total > 0) sent.toFloat() / total.toFloat() else 0.5f
+                            }
+                            if (success) {
+                                successCount++
+                                val sizeStr = if (realSize > 1024 * 1024) "%.2f MB".format(realSize / (1024f * 1024f)) else "%.1f KB".format(realSize / 1024f)
+                                sharedHistory.add(0, SessionSharedItem(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    title = filename,
+                                    subtitle = "Streamed to PC ($sizeStr) • Tap to View",
+                                    isOutgoing = true,
+                                    type = "FILE",
+                                    uriString = uri.toString()
+                                ))
+                            } else {
+                                statusMessage = "Transfer for $filename failed or declined."
+                                break
+                            }
                         }
+                    }
+                    statusMessage = if (successCount == totalCount) {
+                        if (totalCount > 1) "All $totalCount files sent & verified!" else "File sent & verified!"
+                    } else {
+                        "Sent $successCount of $totalCount files."
                     }
                 } catch (e: Exception) {
                     statusMessage = "File error: ${e.message}"
@@ -283,12 +301,21 @@ fun MainScreen(
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = { onAcceptOffer(incomingOffer.transferId) },
-                    colors = ButtonDefaults.buttonColors(containerColor = SignalSuccess),
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Text("Accept & Save", color = Color.White)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { onAcceptAllOffers(incomingOffer.transferId) },
+                        colors = ButtonDefaults.buttonColors(containerColor = CarbonElevated),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text("Accept All", color = BrandAccent)
+                    }
+                    Button(
+                        onClick = { onAcceptOffer(incomingOffer.transferId) },
+                        colors = ButtonDefaults.buttonColors(containerColor = SignalSuccess),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text("Accept & Save", color = Color.White)
+                    }
                 }
             },
             dismissButton = {
@@ -1007,12 +1034,12 @@ fun MainScreen(
                     )
                     Column {
                         Text(
-                            text = "Stream File to PC",
+                            text = "Stream Files to PC",
                             style = MaterialTheme.typography.titleMedium,
                             color = TextPrimary
                         )
                         Text(
-                            text = "Select any file from device to stream directly to PC Downloads",
+                            text = "Select one or multiple files to stream directly to PC Downloads",
                             style = MaterialTheme.typography.labelMedium,
                             color = TextSecondary
                         )

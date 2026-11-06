@@ -43,6 +43,7 @@ class CrossDropAndroidServer(
     var onDownloadComplete: ((file: File, success: Boolean) -> Unit)? = null
     var sessionKeySupplier: (() -> ByteArray?)? = null
     var isConnectedSupplier: (() -> Boolean)? = null
+    var autoAcceptFiles: Boolean = false
 
     init {
         ForegroundService.onAcceptAction = { transferId ->
@@ -156,28 +157,34 @@ class CrossDropAndroidServer(
                     val offer = IncomingFileOffer(transferId, filename, totalSize)
                     pendingOffers[transferId] = offer
 
-                    val sizeStr = if (totalSize > 1024 * 1024) "%.2f MB".format(totalSize / (1024f * 1024f)) else "%.1f KB".format(totalSize / 1024f)
-                    ForegroundService.postIncomingTransferNotification(
-                        context,
-                        transferId,
-                        "Incoming File: $filename",
-                        "$sizeStr • Tap to accept or reject"
-                    )
-
-                    mainHandler.post {
-                        onIncomingOffer?.invoke(offer)
-                    }
-
-                    // Await user approval (up to 10 minutes)
-                    val accepted = try {
-                        withTimeout(600_000L) {
-                            offer.acceptDeferred.await()
-                        }
-                    } catch (e: Exception) {
-                        false
-                    } finally {
+                    val accepted = if (autoAcceptFiles) {
+                        Log.i("CrossDropServer", "Auto-accepting incoming file in batch: $filename")
                         pendingOffers.remove(transferId)
-                        ForegroundService.cancelIncomingTransferNotification(context, transferId)
+                        true
+                    } else {
+                        val sizeStr = if (totalSize > 1024 * 1024) "%.2f MB".format(totalSize / (1024f * 1024f)) else "%.1f KB".format(totalSize / 1024f)
+                        ForegroundService.postIncomingTransferNotification(
+                            context,
+                            transferId,
+                            "Incoming File: $filename",
+                            "$sizeStr • Tap to accept or reject"
+                        )
+
+                        mainHandler.post {
+                            onIncomingOffer?.invoke(offer)
+                        }
+
+                        // Await user approval (up to 10 minutes)
+                        try {
+                            withTimeout(600_000L) {
+                                offer.acceptDeferred.await()
+                            }
+                        } catch (e: Exception) {
+                            false
+                        } finally {
+                            pendingOffers.remove(transferId)
+                            ForegroundService.cancelIncomingTransferNotification(context, transferId)
+                        }
                     }
 
                     if (!accepted) {

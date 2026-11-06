@@ -135,6 +135,7 @@ class MainActivity : ComponentActivity() {
                 if (isConnectedState && !socketClient.isTransferring) {
                     val ok = socketClient.sendHeartbeat()
                     if (!ok && !socketClient.isTransferring) {
+                        androidServer.autoAcceptFiles = false
                         isConnectedState = false
                         connectionStatus = "Disconnected"
                     }
@@ -190,6 +191,11 @@ class MainActivity : ComponentActivity() {
                         androidServer.acceptOffer(transferId)
                         currentIncomingOffer = null
                     },
+                    onAcceptAllOffers = { transferId ->
+                        androidServer.autoAcceptFiles = true
+                        androidServer.acceptOffer(transferId)
+                        currentIncomingOffer = null
+                    },
                     onRejectOffer = { transferId ->
                         androidServer.rejectOffer(transferId)
                         currentIncomingOffer = null
@@ -214,6 +220,7 @@ class MainActivity : ComponentActivity() {
                     onDisconnect = {
                         lifecycleScope.launch {
                             socketClient.disconnect()
+                            androidServer.autoAcceptFiles = false
                             isConnectedState = false
                             connectionStatus = "Disconnected"
                         }
