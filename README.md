@@ -4,7 +4,7 @@
   <img src="CrossDropDemoImg.png" alt="CrossDrop Demo" width="100%" />
 </p>
 
-**CrossDrop** is an ultra-lightweight, zero-cloud peer-to-peer (P2P) sync utility operating directly between a Windows 11 PC and an Android 14 (API 34) device on the local network.
+**CrossDrop** is an ultra-lightweight, zero-cloud peer-to-peer (P2P) sync utility operating directly between a Windows 11 PC and an Android 14 (API 34) device on the local network. It's for when you want to get files shared from your pc to phone or vice versa quick and clean! Ok maybe not "quick" for giant files, but clean for sure! No waiting for cloud processing, no popups from unknown third party apps, and no external servers!
 
 ---
 
