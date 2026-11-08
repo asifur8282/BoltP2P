@@ -1,5 +1,5 @@
 # Software Requirements Specification (SRS)
-## Project: CrossDrop (Ultra-Lightweight P2P Cross-Device Sync)
+## Project: BoltP2P (Ultra-Lightweight P2P Cross-Device Sync)
 **Version:** 1.0  
 **Target Environment:** Windows 11 & Android 14 (API 34)  
 **Development Toolchain:** Android CLI + JDK 21 / Python 3.11+  
@@ -9,10 +9,10 @@
 ## 1. Introduction
 
 ### 1.1 Purpose
-This document specifies the software requirements for **CrossDrop**, a zero-cloud, peer-to-peer (P2P) local synchronization utility operating directly between an Android smartphone and a Windows 11 PC on the same Local Area Network (LAN). The solution addresses the need for instantaneous file, image, and text transfer without intermediate transit platforms (WhatsApp, email, cloud drives).
+This document specifies the software requirements for **BoltP2P**, a zero-cloud, peer-to-peer (P2P) local synchronization utility operating directly between an Android smartphone and a Windows 11 PC on the same Local Area Network (LAN). The solution addresses the need for instantaneous file, image, and text transfer without intermediate transit platforms (WhatsApp, email, cloud drives).
 
 ### 1.2 Scope
-CrossDrop provides:
+BoltP2P provides:
 - One-time initial device pairing via QR code or numeric PIN.
 - Persistent LAN device discovery and connection maintenance without repeated pairing steps.
 - Direct-from-camera photo capture and transfer with zero device-side intermediate caching.
@@ -33,7 +33,7 @@ CrossDrop provides:
 ## 2. Overall Description
 
 ### 2.1 Product Perspective
-CrossDrop operates as a lightweight distributed application composed of two endpoints:
+BoltP2P operates as a lightweight distributed application composed of two endpoints:
 1. **Desktop Daemon:** A low-overhead Python background process (system tray + native notification hooks) on Windows 11.
 2. **Mobile Client:** A lean Kotlin application built with Jetpack Compose using the modern Android CLI and target platform API 34.
 

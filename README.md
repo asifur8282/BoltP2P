@@ -1,10 +1,10 @@
-# CrossDrop
+# BoltP2P
 
 <p align="center">
-  <img src="CrossDropDemoImg.png" alt="CrossDrop Demo" width="100%" />
+  <img src="BoltP2PDemoImg.png" alt="BoltP2P Demo" width="100%" />
 </p>
 
-**CrossDrop** is an ultra-lightweight, zero-cloud peer-to-peer (P2P) sync utility operating directly between a Windows 11 PC and an Android 14 (API 34) device on the local network. It's for when you want to get files shared from your pc to phone or vice versa quick and clean! Ok maybe not "quick" for giant files, but clean for sure! No waiting for cloud processing, no popups from unknown third party apps, and no external servers!
+**BoltP2P** is an ultra-lightweight, zero-cloud peer-to-peer (P2P) sync utility operating directly between a Windows 11 PC and an Android 14 (API 34) device on the local network. It's for when you want to get files shared from your pc to phone or vice versa quick and clean! Ok maybe not "quick" for giant files, but clean for sure! No waiting for cloud processing, no popups from unknown third party apps, and no external servers!
 
 ---
 
@@ -26,7 +26,7 @@
 |                                                                                 |
 |   +--------------------------+                       +----------------------+   |
 |   |    Android Client App    | <==== mDNS / NSD ===> |  Windows 11 Daemon   |   |
-|   | (Jetpack Compose / Java) |  (_crossdrop._tcp.)   |  (Python 3.14 Async) |   |
+|   | (Jetpack Compose / Java) |  (_boltp2p._tcp.)     |  (Python 3.14 Async) |   |
 |   +--------------------------+                       +----------------------+   |
 |                |                                                 |              |
 |                +============ Direct TCP Pipe (Port 58241) =======+              |
@@ -100,7 +100,7 @@ $env:PATH = "C:\Android\platform-tools;C:\Android\cmdline-tools\latest\bin;$env:
 
 1. Navigate to the desktop directory:
    ```powershell
-   cd D:\Crossdrop\crossdrop-desktop
+   cd D:\Crossdrop\boltp2p-desktop
    ```
 
 2. Install dependencies:
@@ -113,7 +113,7 @@ $env:PATH = "C:\Android\platform-tools;C:\Android\cmdline-tools\latest\bin;$env:
    python main.py
    ```
    - The daemon will minimize to the system tray with a geometric status icon.
-   - Right-click the tray icon to **"Open CrossDrop"** (bringing up the 460x600 quick window), **"Push Clipboard to Phone"**, or **"Send File..."**.
+   - Right-click the tray icon to **"Open BoltP2P"** (bringing up the 460x600 quick window), **"Push Clipboard to Phone"**, or **"Send File..."**.
    - Native Windows 11 actionable notifications will automatically trigger when text or files arrive.
 
 ---
@@ -128,7 +128,7 @@ $env:PATH = "C:\Android\platform-tools;C:\Android\cmdline-tools\latest\bin;$env:
 
 2. Navigate to the android client directory:
    ```powershell
-   cd D:\Crossdrop\crossdrop-android
+   cd D:\Crossdrop\boltp2p-android
    ```
 
 3. Compile the debug APK using the headless Gradle wrapper:
@@ -143,18 +143,18 @@ $env:PATH = "C:\Android\platform-tools;C:\Android\cmdline-tools\latest\bin;$env:
 
 5. Launch the client directly via ADB:
    ```powershell
-   adb shell am start -n com.crossdrop.client.debug/com.crossdrop.client.MainActivity
+   adb shell am start -n com.boltp2p.client.debug/com.boltp2p.client.MainActivity
    ```
 
 ---
 
-### 4.3 Compiling Standalone Windows 11 Executable (`CrossDrop.exe`)
+### 4.3 Compiling Standalone Windows 11 Executable (`BoltP2P.exe`)
 
 To build the windowless, standalone `.exe`:
 
 1. Navigate to the desktop directory:
    ```powershell
-   cd D:\Crossdrop\crossdrop-desktop
+   cd D:\Crossdrop\boltp2p-desktop
    ```
 
 2. Run the packaging script:
@@ -165,12 +165,12 @@ To build the windowless, standalone `.exe`:
 
 3. The standalone binary is produced at:
    ```
-   D:\Crossdrop\crossdrop-desktop\dist\CrossDrop.exe
+   D:\Crossdrop\boltp2p-desktop\dist\BoltP2P.exe
    ```
 
 4. Launch the binary in the background:
    ```powershell
-   Start-Process .\dist\CrossDrop.exe
+   Start-Process .\dist\BoltP2P.exe
    ```
 
 ---
@@ -178,9 +178,9 @@ To build the windowless, standalone `.exe`:
 ## 5. Mobile Client Usage
 
 - **Camera Direct Shutter:** Tap the shutter button in the center viewfinder. The camera captures the JPEG into a memory `ByteBuffer` and immediately streams it to your PC. A slim 2px progress bar on top tracks transmission.
-- **Quick Clipboard Push:** When you copy text anywhere on Android and open CrossDrop, the clipboard snippet is automatically detected. Tap **"Push Clipboard to PC Now"** to instantly dispatch it to Windows.
+- **Quick Clipboard Push:** When you copy text anywhere on Android and open BoltP2P, the clipboard snippet is automatically detected. Tap **"Push Clipboard to PC Now"** to instantly dispatch it to Windows.
 - **Arbitrary File Transfer:** Tap **"Stream File"** to pick any document, video, or archive and send it to your PC.
-- **PC Target:** The app automatically discovers your PC via mDNS (`_crossdrop._tcp.local.`). You can also tap the status pill or **"PC Target"** tile to manually set the PC IP address and port.
+- **PC Target:** The app automatically discovers your PC via mDNS (`_boltp2p._tcp.local.`). You can also tap the status pill or **"PC Target"** tile to manually set the PC IP address and port.
 
 ---
 
@@ -188,8 +188,8 @@ To build the windowless, standalone `.exe`:
 
 | Issue | Cause | Solution |
 | :--- | :--- | :--- |
-| **"Connection refused" or red dot on phone** | Windows Firewall blocking port 58241 | Run in elevated PowerShell: `New-NetFirewallRule -DisplayName "CrossDrop" -Direction Inbound -LocalPort 58241 -Protocol TCP -Action Allow` |
-| **mDNS Auto-Discovery fails** | Wi-Fi router AP Isolation enabled | Router blocks multicast between devices. Manually enter PC's IP address (from `ipconfig`) in CrossDrop Mobile Target Settings. |
+| **"Connection refused" or red dot on phone** | Windows Firewall blocking port 58241 | Run in elevated PowerShell: `New-NetFirewallRule -DisplayName "BoltP2P" -Direction Inbound -LocalPort 58241 -Protocol TCP -Action Allow` |
+| **mDNS Auto-Discovery fails** | Wi-Fi router AP Isolation enabled | Router blocks multicast between devices. Manually enter PC's IP address (from `ipconfig`) in BoltP2P Mobile Target Settings. |
 | **Toast notifications do not show** | Windows Focus Assist / Do Not Disturb | Check Windows 11 Settings > System > Notifications and ensure notifications are enabled for Python/Terminal. |
 | **ADB device unauthorized** | Phone screen locked or RSA key unaccepted | Unlock phone screen and tap "Always allow from this computer" on the USB Debugging prompt. |
-| **Transfer SHA-256 Mismatch** | Network packet loss or stream truncated | CrossDrop automatically deletes corrupted partial writes on integrity failure. Retry transfer on stable Wi-Fi. |
+| **Transfer SHA-256 Mismatch** | Network packet loss or stream truncated | BoltP2P automatically deletes corrupted partial writes on integrity failure. Retry transfer on stable Wi-Fi. |

@@ -1,4 +1,4 @@
-# CrossDrop UI/UX Design System Specification
+# BoltP2P UI/UX Design System Specification
 **Document:** `design.md`  
 **Target:** Desktop (Windows 11) & Mobile (Android 14 / Compose)  
 **Tone & Persona:** Utilitarian, tactile, engineered, quiet utility
@@ -84,7 +84,7 @@ The desktop client is not an expansive website wrapped in an electron frame. It 
 
 ```
 +-------------------------------------------------------------+
-| CrossDrop [Desktop Daemon]             [ - ] [ # ] [ X ]    |  <- 32px Native Titlebar
+| BoltP2P [Desktop Daemon]               [ - ] [ # ] [ X ]    |  <- 32px Native Titlebar
 +-------------------------------------------------------------+
 | [● ONLINE] Connected to: Pixel 8 Pro (192.168.1.42)         |  <- 36px Status Header
 +-------------------------------------------------------------+
@@ -125,7 +125,7 @@ The desktop client is not an expansive website wrapped in an electron frame. It 
 
 ```
 +-----------------------------------+
-| CrossDrop              [● PC Paired] |  <- App Bar with live socket dot
+| BoltP2P                [● PC Paired] |  <- App Bar with live socket dot
 +-----------------------------------+
 |                                   |
 |   +---------------------------+   |
@@ -165,7 +165,7 @@ The desktop client is not an expansive website wrapped in an electron frame. It 
 
 ### 6.1 Jetpack Compose Color & Style Theme (`ui/theme/Theme.kt`)
 ```kotlin
-package com.crossdrop.client.ui.theme
+package com.boltp2p.client.ui.theme
 
 import androidx.compose.material3.*
 import androidx.compose.ui.graphics.Color
@@ -189,7 +189,7 @@ val SignalWarning = Color(0xFFD29922)
 // Typography Config (Google Sans or Montserrat)
 val AppFontFamily = FontFamily.Default // Replaced with Font(R.font.googlesans_regular)
 
-val CrossDropTypography = Typography(
+val BoltP2PTypography = Typography(
     headlineSmall = TextStyle(
         fontFamily = AppFontFamily,
         fontWeight = FontWeight.SemiBold,

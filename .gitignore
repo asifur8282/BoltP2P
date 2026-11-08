@@ -1,5 +1,5 @@
 # ====================================================================
-# CrossDrop Master .gitignore (Android Kotlin + Desktop Python)
+# BoltP2P Master .gitignore (Android Kotlin + Desktop Python)
 # ====================================================================
 
 # --------------------------------------------------
@@ -7,10 +7,10 @@
 # --------------------------------------------------
 *.log
 **/*.log
-crossdrop.log
-**/crossdrop.log
-crossdrop-desktop/Downloads/*
-!crossdrop-desktop/Downloads/.gitkeep
+boltp2p.log
+**/boltp2p.log
+boltp2p-desktop/Downloads/*
+!boltp2p-desktop/Downloads/.gitkeep
 **/Downloads/*
 !**/Downloads/.gitkeep
 
