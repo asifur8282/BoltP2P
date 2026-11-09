@@ -4,12 +4,31 @@ Coordinates async network server, mDNS discovery, Windows 11 notifications,
 system tray icon, and the 460x600 quick utility window.
 """
 
+import os
+import sys
+
+# Ensure boltp2p-desktop root is always on sys.path for relative submodule resolution
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+if _current_dir not in sys.path:
+    sys.path.insert(0, _current_dir)
+
+# 1. Force Windows to recognize DPI awareness before creating the window
+if sys.platform == "win32":
+    try:
+        import ctypes
+        # Set Per-Monitor DPI awareness (V2)
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            # Fallback for older Windows systems
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
 from typing import Optional, List, Union
 import asyncio
 import json
 import logging
-import os
-import sys
 import time
 import threading
 import pyperclip

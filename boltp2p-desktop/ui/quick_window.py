@@ -8,7 +8,22 @@ Compact 460px x 600px utilitarian UI adhering strictly to design.md tokens:
 - Quick Send controls (Push Clipboard, Stream File, Custom Text)
 """
 
+import sys
 import tkinter as tk
+
+# 1. Force Windows to recognize DPI awareness before creating the window
+if sys.platform == "win32":
+    try:
+        import ctypes
+        # Set Per-Monitor DPI awareness (V2)
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            # Fallback for older Windows systems
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
 from tkinter import ttk, filedialog, messagebox
 import queue
 import time
@@ -16,9 +31,34 @@ import os
 import json
 import pyperclip
 import qrcode
-from PIL import Image, ImageTk
+import ctypes
+from ctypes import wintypes
+from PIL import Image, ImageTk, ImageGrab
 from typing import Optional, Callable, List, Any
 from core.network_server import get_lan_ip
+
+# Win32 Drag-Drop hooks
+WM_DROPFILES = 0x0233
+GWL_WNDPROC = -4
+
+try:
+    user32 = ctypes.windll.user32
+    shell32 = ctypes.windll.shell32
+
+    SetWindowLongPtr = user32.SetWindowLongPtrW
+    SetWindowLongPtr.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+    SetWindowLongPtr.restype = ctypes.c_void_p
+
+    CallWindowProc = user32.CallWindowProcW
+    CallWindowProc.argtypes = [ctypes.c_void_p, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    CallWindowProc.restype = ctypes.c_longlong
+
+    WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_longlong, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+    HAS_WIN32_DND = True
+except Exception:
+    HAS_WIN32_DND = False
+
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"}
 
 # Design Tokens (design.md)
 COLOR_SURFACE_0 = "#0E1116"
@@ -36,6 +76,49 @@ FONT_SANS = ("Segoe UI", 10)
 FONT_SANS_BOLD = ("Segoe UI", 10, "bold")
 FONT_MONO = ("Consolas", 9)
 FONT_HEADER = ("Segoe UI", 11, "bold")
+
+
+class ToolTip:
+    """Hover tooltip for Tkinter widgets."""
+    def __init__(self, widget, text: str):
+        self.widget = widget
+        self.text = text
+        self.tip_window = None
+        self.widget.bind("<Enter>", self.show_tip, add="+")
+        self.widget.bind("<Leave>", self.hide_tip, add="+")
+
+    def show_tip(self, event=None):
+        if self.tip_window or not self.widget.winfo_exists() or not self.text:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 10
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+            self.tip_window = tw = tk.Toplevel(self.widget)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            tw.configure(bg=COLOR_BORDER)
+            lbl = tk.Label(
+                tw,
+                text=self.text,
+                justify="left",
+                bg=COLOR_SURFACE_1,
+                fg=COLOR_TEXT_PRIMARY,
+                relief="flat",
+                padx=6,
+                pady=3,
+                font=FONT_MONO
+            )
+            lbl.pack(padx=1, pady=1)
+        except Exception:
+            pass
+
+    def hide_tip(self, event=None):
+        if self.tip_window:
+            try:
+                self.tip_window.destroy()
+            except Exception:
+                pass
+            self.tip_window = None
 
 
 class QuickWindow:
@@ -76,9 +159,22 @@ class QuickWindow:
         self.offer_progress_bars: dict = {}
         self.offer_progress_labels: dict = {}
         self.outgoing_frame: Optional[tk.LabelFrame] = None
+        self.transfers_card: Optional[tk.LabelFrame] = None
         self.outgoing_progress_bars: dict = {}
         self.outgoing_progress_labels: dict = {}
         self.last_offers_signature: str = ""
+
+        # Staging Area state for general input
+        self.staged_files: List[str] = []
+        self.staged_thumbnails: dict = {}
+        self.staged_container: Optional[tk.Frame] = None
+        self.staged_items_inner: Optional[tk.Frame] = None
+        self.staged_canvas: Optional[tk.Canvas] = None
+        self.staged_count_lbl: Optional[tk.Label] = None
+        self.send_btn: Optional[tk.Button] = None
+        self.btn_row: Optional[tk.Frame] = None
+        self._old_wndprocs: dict = {}
+        self._wndproc_refs: list = []
 
     def show_or_restore(self) -> None:
         """Thread-safe request to bring window to front or initialize."""
@@ -100,8 +196,8 @@ class QuickWindow:
 
         self.root = tk.Tk()
         self.root.title("BoltP2P [Desktop Daemon]")
-        self.root.geometry("460x720")
-        self.root.minsize(460, 640)
+        self.root.geometry("460x700")
+        self.root.minsize(460, 480)
         self.root.configure(bg=COLOR_SURFACE_0)
 
         # Style configurations for ttk
@@ -120,6 +216,7 @@ class QuickWindow:
             darkcolor=COLOR_ACCENT
         )
         self._build_ui()
+        self._setup_drag_and_drop()
 
         # Handle window close as hide to tray
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
@@ -258,10 +355,10 @@ class QuickWindow:
         )
         connect_remote_btn.pack(fill="x")
 
-        # 3. Quick Send Card
+        # 3. General Input & Staged Send Card
         send_card = tk.LabelFrame(
             self.root,
-            text=" QUICK SEND ",
+            text=" GENERAL INPUT & QUICK SEND ",
             bg=COLOR_SURFACE_1,
             fg=COLOR_TEXT_PRIMARY,
             font=FONT_HEADER,
@@ -286,16 +383,73 @@ class QuickWindow:
             padx=6,
             pady=6
         )
-        self.text_input.pack(fill="x", pady=(0, 8))
-        self.text_input.insert("1.0", "Paste or type text to push to phone...")
+        self.text_input.pack(fill="x", pady=(0, 6))
+        self.text_input.insert("1.0", "Type message, or drop files / paste image (Ctrl+V) here...")
         self.text_input.bind("<FocusIn>", self._clear_placeholder)
+        self.text_input.bind("<Control-v>", self._handle_paste_event)
+        self.text_input.bind("<Control-V>", self._handle_paste_event)
+        self.text_input.bind("<Control-Return>", lambda e: self._handle_send_staged())
+        self.root.bind("<Control-v>", self._handle_paste_event)
+        self.root.bind("<Control-V>", self._handle_paste_event)
+        self.root.bind("<Control-Return>", lambda e: self._handle_send_staged())
+
+        # Staged Attachments Container (Hidden until files/images are staged)
+        self.staged_container = tk.Frame(send_card, bg=COLOR_SURFACE_1)
+
+        staged_header = tk.Frame(self.staged_container, bg=COLOR_SURFACE_1)
+        staged_header.pack(fill="x", pady=(0, 4))
+
+        self.staged_count_lbl = tk.Label(
+            staged_header,
+            text="STAGED ATTACHMENTS (Ready to send)",
+            bg=COLOR_SURFACE_1,
+            fg=COLOR_ACCENT,
+            font=FONT_MONO
+        )
+        self.staged_count_lbl.pack(side="left")
+
+        clear_all_btn = tk.Button(
+            staged_header,
+            text="Clear All",
+            bg=COLOR_SURFACE_1,
+            fg=COLOR_TEXT_SECONDARY,
+            activeforeground=COLOR_DANGER,
+            activebackground=COLOR_SURFACE_1,
+            font=("Segoe UI", 8),
+            relief="flat",
+            cursor="hand2",
+            command=self.clear_staged_files
+        )
+        clear_all_btn.pack(side="right")
+
+        # Scrollable container for thumbnail cards
+        staged_scroll_frame = tk.Frame(self.staged_container, bg=COLOR_SURFACE_1)
+        staged_scroll_frame.pack(fill="x", pady=(0, 2))
+
+        self.staged_canvas = tk.Canvas(staged_scroll_frame, bg=COLOR_SURFACE_1, height=92, highlightthickness=0)
+        self.staged_items_inner = tk.Frame(self.staged_canvas, bg=COLOR_SURFACE_1)
+
+        self.staged_items_inner.bind(
+            "<Configure>",
+            lambda e: self.staged_canvas.configure(scrollregion=self.staged_canvas.bbox("all"))
+        )
+        self.staged_canvas.create_window((0, 0), window=self.staged_items_inner, anchor="nw")
+        self.staged_canvas.pack(side="top", fill="x", expand=True)
+
+        def _on_h_mousewheel(event):
+            if self.staged_canvas and self.staged_canvas.winfo_exists():
+                self.staged_canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        self.staged_canvas.bind("<MouseWheel>", _on_h_mousewheel)
+        self.staged_items_inner.bind("<MouseWheel>", _on_h_mousewheel)
 
         btn_row = tk.Frame(send_card, bg=COLOR_SURFACE_1)
         btn_row.pack(fill="x")
+        self.btn_row = btn_row
 
-        push_btn = tk.Button(
+        self.send_btn = tk.Button(
             btn_row,
-            text="Push Clipboard",
+            text="Send to Connected Device",
             bg=COLOR_ACCENT,
             fg="#FFFFFF",
             activebackground="#388BFD",
@@ -303,30 +457,15 @@ class QuickWindow:
             font=FONT_SANS_BOLD,
             relief="flat",
             cursor="hand2",
-            padx=10,
+            padx=12,
             pady=4,
-            command=self._handle_push_clipboard
+            command=self._handle_send_staged
         )
-        push_btn.pack(side="left", padx=(0, 6))
+        self.send_btn.pack(side="left", padx=(0, 6))
 
-        send_text_btn = tk.Button(
+        attach_btn = tk.Button(
             btn_row,
-            text="Send Text",
-            bg=COLOR_SURFACE_2,
-            fg=COLOR_TEXT_PRIMARY,
-            activebackground=COLOR_BORDER,
-            font=FONT_SANS,
-            relief="flat",
-            cursor="hand2",
-            padx=8,
-            pady=4,
-            command=self._handle_send_custom_text
-        )
-        send_text_btn.pack(side="left", padx=(0, 6))
-
-        file_btn = tk.Button(
-            btn_row,
-            text="Select & Stream Files",
+            text="📎 Attach Files",
             bg=COLOR_SURFACE_2,
             fg=COLOR_TEXT_PRIMARY,
             activebackground=COLOR_BORDER,
@@ -337,7 +476,22 @@ class QuickWindow:
             pady=4,
             command=self._handle_select_file
         )
-        file_btn.pack(side="right")
+        attach_btn.pack(side="left", padx=(0, 6))
+
+        push_btn = tk.Button(
+            btn_row,
+            text="📋 Push Clipboard",
+            bg=COLOR_SURFACE_2,
+            fg=COLOR_TEXT_SECONDARY,
+            activebackground=COLOR_BORDER,
+            font=FONT_SANS,
+            relief="flat",
+            cursor="hand2",
+            padx=8,
+            pady=4,
+            command=self._handle_push_clipboard
+        )
+        push_btn.pack(side="right")
 
         # Outgoing Stream Card (hidden until file streaming is active)
         self.outgoing_frame = tk.LabelFrame(
@@ -354,49 +508,9 @@ class QuickWindow:
         )
         # Not packed initially; packed on start_outgoing_transfer
 
-        # 3. Active / Recent Transfers (10m Ephemeral RAM Window)
-        transfers_card = tk.LabelFrame(
-            self.root,
-            text=" ACTIVE / RECENT OFFERS (10m Ephemeral RAM Window) ",
-            bg=COLOR_SURFACE_1,
-            fg=COLOR_TEXT_PRIMARY,
-            font=FONT_HEADER,
-            highlightbackground=COLOR_BORDER,
-            highlightthickness=1,
-            bd=0,
-            padx=10,
-            pady=8
-        )
-        transfers_card.pack(fill="both", expand=True, padx=10, pady=6)
-
-        # Canvas + Scrollbar for Offers List
-        canvas = tk.Canvas(transfers_card, bg=COLOR_SURFACE_1, highlightthickness=0)
-        self.canvas = canvas
-        scrollbar = ttk.Scrollbar(transfers_card, orient="vertical", command=canvas.yview)
-        self.offers_frame = tk.Frame(canvas, bg=COLOR_SURFACE_1)
-
-        self.offers_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        canvas.create_window((0, 0), window=self.offers_frame, anchor="nw", width=416)
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        def _on_mousewheel(event):
-            if self.canvas and self.canvas.winfo_exists():
-                self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        canvas.bind("<MouseWheel>", _on_mousewheel)
-        self.offers_frame.bind("<MouseWheel>", _on_mousewheel)
-
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-
-        self.refresh_offers_ui()
-
-        # 4. Bottom Utility Bar
+        # 4. Bottom Utility Bar (docked permanently to bottom of window)
         bottom_bar = tk.Frame(self.root, bg=COLOR_SURFACE_1, height=36, highlightbackground=COLOR_BORDER, highlightthickness=1)
-        bottom_bar.pack(fill="x", padx=10, pady=(6, 10))
+        bottom_bar.pack(side="bottom", fill="x", padx=10, pady=(4, 10))
 
         self.auto_accept_files_var = tk.BooleanVar(value=getattr(self.server, "auto_accept_files", False))
         chk_files = tk.Checkbutton(
@@ -442,10 +556,45 @@ class QuickWindow:
         )
         open_folder_btn.pack(side="left", padx=8, pady=4)
 
-    def _clear_placeholder(self, event) -> None:
-        current = self.text_input.get("1.0", "end-1c").strip()
-        if current == "Paste or type text to push to phone...":
-            self.text_input.delete("1.0", "end")
+        # 3. Active / Recent Transfers (10m Ephemeral RAM Window)
+        self.transfers_card = tk.LabelFrame(
+            self.root,
+            text=" ACTIVE / RECENT OFFERS (10m Ephemeral RAM Window) ",
+            bg=COLOR_SURFACE_1,
+            fg=COLOR_TEXT_PRIMARY,
+            font=FONT_HEADER,
+            highlightbackground=COLOR_BORDER,
+            highlightthickness=1,
+            bd=0,
+            padx=10,
+            pady=8
+        )
+        self.transfers_card.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+
+        # Canvas + Scrollbar for Offers List
+        canvas = tk.Canvas(self.transfers_card, bg=COLOR_SURFACE_1, highlightthickness=0)
+        self.canvas = canvas
+        scrollbar = ttk.Scrollbar(self.transfers_card, orient="vertical", command=canvas.yview)
+        self.offers_frame = tk.Frame(canvas, bg=COLOR_SURFACE_1)
+
+        self.offers_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        canvas.create_window((0, 0), window=self.offers_frame, anchor="nw", width=416)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        def _on_mousewheel(event):
+            if self.canvas and self.canvas.winfo_exists():
+                self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind("<MouseWheel>", _on_mousewheel)
+        self.offers_frame.bind("<MouseWheel>", _on_mousewheel)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self.refresh_offers_ui()
 
     def _toggle_auto_accept(self) -> None:
         if self.server and self.auto_accept_var:
@@ -484,6 +633,379 @@ class QuickWindow:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open file: {e}")
 
+    def _clear_placeholder(self, event=None) -> None:
+        if not self.text_input:
+            return
+        current = self.text_input.get("1.0", "end-1c").strip()
+        if current in [
+            "Paste or type text to push to phone...",
+            "Type message, or drop files / paste image (Ctrl+V) here..."
+        ]:
+            self.text_input.delete("1.0", "end")
+
+    def _setup_drag_and_drop(self) -> None:
+        """Register native Win32 WM_DROPFILES on window and input widgets."""
+        if not HAS_WIN32_DND or not self.root:
+            return
+        try:
+            self.root.update_idletasks()
+            targets = [self.root]
+            if self.text_input:
+                targets.append(self.text_input)
+
+            def make_wndproc(hwnd):
+                def proc(h, msg, wp, lp):
+                    if msg == WM_DROPFILES:
+                        hdrop = wp
+                        count = shell32.DragQueryFileW(hdrop, 0xFFFFFFFF, None, 0)
+                        dropped = []
+                        for i in range(count):
+                            length = shell32.DragQueryFileW(hdrop, i, None, 0)
+                            buf = ctypes.create_unicode_buffer(length + 1)
+                            shell32.DragQueryFileW(hdrop, i, buf, length + 1)
+                            dropped.append(buf.value)
+                        shell32.DragFinish(hdrop)
+                        if dropped:
+                            self.event_queue.put(("files_dropped", dropped))
+                        return 0
+                    old_p = self._old_wndprocs.get(h)
+                    if old_p:
+                        return CallWindowProc(old_p, h, msg, wp, lp)
+                    return 0
+                return WNDPROC(proc)
+
+            for target in targets:
+                try:
+                    hid = target.winfo_id()
+                    shell32.DragAcceptFiles(hid, True)
+                    wp = make_wndproc(hid)
+                    self._wndproc_refs.append(wp)
+                    old_p = SetWindowLongPtr(hid, GWL_WNDPROC, ctypes.cast(wp, ctypes.c_void_p))
+                    self._old_wndprocs[hid] = old_p
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _handle_paste_event(self, event=None):
+        """Handle Ctrl+V: stage image or files from clipboard without auto-sending; allow text to paste."""
+        # 1. Check if an image or list of files is in the clipboard
+        try:
+            from PIL import ImageGrab
+            data = ImageGrab.grabclipboard()
+            if data is not None:
+                if isinstance(data, list):
+                    # List of file paths copied in Windows Explorer
+                    self.stage_files(data)
+                    return "break"
+                elif hasattr(data, "save"):
+                    # PIL Image object from Snipping Tool or Browser
+                    cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cache")
+                    os.makedirs(cache_dir, exist_ok=True)
+                    timestamp = int(time.time() * 1000)
+                    img_path = os.path.join(cache_dir, f"pasted_image_{timestamp}.png")
+                    data.save(img_path, "PNG")
+                    self.stage_files([img_path])
+                    return "break"
+        except Exception:
+            pass
+
+        # 2. Check win32clipboard for copied files (CF_HDROP)
+        try:
+            import win32clipboard
+            win32clipboard.OpenClipboard(self.root.winfo_id() if self.root else 0)
+            try:
+                if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_HDROP):
+                    files = win32clipboard.GetClipboardData(win32clipboard.CF_HDROP)
+                    if files:
+                        self.stage_files(list(files))
+                        return "break"
+            finally:
+                win32clipboard.CloseClipboard()
+        except Exception:
+            pass
+
+        # 3. For text paste: clear placeholder if present, let standard Tkinter paste continue
+        if self.text_input:
+            current = self.text_input.get("1.0", "end-1c").strip()
+            if current in [
+                "Paste or type text to push to phone...",
+                "Type message, or drop files / paste image (Ctrl+V) here..."
+            ]:
+                self.text_input.delete("1.0", "end")
+        return None
+
+    def stage_files(self, filepaths: List[str]) -> None:
+        """Stage files or images into the general input without sending immediately."""
+        changed = False
+        for path in filepaths:
+            if path and os.path.exists(path) and path not in self.staged_files:
+                self.staged_files.append(path)
+                changed = True
+        if changed:
+            self._render_staged_items()
+
+    def unstage_file(self, filepath: str) -> None:
+        """Remove a staged file before sending."""
+        if filepath in self.staged_files:
+            self.staged_files.remove(filepath)
+            self._render_staged_items()
+
+    def clear_staged_files(self) -> None:
+        """Remove all staged files."""
+        self.staged_files.clear()
+        self._render_staged_items()
+
+    def _render_staged_items(self) -> None:
+        """Render square/rounded thumbnails for staged images and document badges."""
+        if not self.staged_container or not self.root or not self.root.winfo_exists():
+            return
+
+        for child in self.staged_items_inner.winfo_children():
+            child.destroy()
+        self.staged_thumbnails.clear()
+
+        if not self.staged_files:
+            self.staged_container.pack_forget()
+            if self.send_btn:
+                self.send_btn.config(text="Send to Connected Device")
+            self.root.update_idletasks()
+            return
+
+        self.staged_container.pack(fill="x", pady=(0, 8), before=self.btn_row)
+        count = len(self.staged_files)
+        self.staged_count_lbl.config(
+            text=f"STAGED ATTACHMENTS ({count} item{'s' if count != 1 else ''} ready to send)"
+        )
+        if self.send_btn:
+            self.send_btn.config(text=f"Send to Connected Device ({count})")
+
+        for filepath in self.staged_files:
+            ext = os.path.splitext(filepath)[1].lower()
+            fname = os.path.basename(filepath)
+            fsize = os.path.getsize(filepath) if os.path.exists(filepath) else 0
+            size_str = f"{fsize/(1024*1024):.1f} MB" if fsize > 1024*1024 else f"{fsize/1024:.0f} KB"
+            is_image = ext in IMAGE_EXTENSIONS
+
+            card = tk.Frame(
+                self.staged_items_inner,
+                bg=COLOR_SURFACE_2,
+                highlightbackground=COLOR_BORDER,
+                highlightthickness=1,
+                padx=4,
+                pady=4,
+                width=78,
+                height=88
+            )
+            card.pack_propagate(False)
+            card.pack(side="left", padx=(0, 6), pady=2)
+
+            # Top bar with close button
+            top_bar = tk.Frame(card, bg=COLOR_SURFACE_2)
+            top_bar.pack(fill="x")
+
+            del_btn = tk.Label(
+                top_bar,
+                text="✕",
+                bg=COLOR_SURFACE_2,
+                fg=COLOR_TEXT_SECONDARY,
+                font=("Segoe UI", 8, "bold"),
+                cursor="hand2"
+            )
+            del_btn.pack(side="right")
+            del_btn.bind("<Enter>", lambda e, b=del_btn: b.config(fg=COLOR_DANGER))
+            del_btn.bind("<Leave>", lambda e, b=del_btn: b.config(fg=COLOR_TEXT_SECONDARY))
+            del_btn.bind("<Button-1>", lambda e, p=filepath: self.unstage_file(p))
+
+            if is_image:
+                thumb_photo = None
+                try:
+                    with Image.open(filepath) as img:
+                        img_thumb = img.copy()
+                        img_thumb.thumbnail((50, 44), Image.Resampling.LANCZOS)
+                        thumb_photo = ImageTk.PhotoImage(img_thumb)
+                        self.staged_thumbnails[filepath] = thumb_photo
+                except Exception:
+                    pass
+
+                if thumb_photo:
+                    thumb_lbl = tk.Label(card, image=thumb_photo, bg=COLOR_SURFACE_2, cursor="hand2")
+                    thumb_lbl.pack(pady=(1, 2))
+                    thumb_lbl.bind("<Button-1>", lambda e, p=filepath: self._show_image_preview(p))
+                else:
+                    thumb_lbl = tk.Label(card, text="🖼️", font=("Segoe UI", 16), bg=COLOR_SURFACE_2, fg=COLOR_ACCENT, cursor="hand2")
+                    thumb_lbl.pack(pady=(2, 2))
+                    thumb_lbl.bind("<Button-1>", lambda e, p=filepath: self._show_image_preview(p))
+
+                ToolTip(card, f"Image: {fname}\nSize: {size_str}\nClick to view full preview")
+                card.bind("<Button-1>", lambda e, p=filepath: self._show_image_preview(p))
+
+            else:
+                # Document / Non-Image Badge
+                badge_text = ext.replace(".", "").upper()[:4] or "FILE"
+                badge_fg = COLOR_ACCENT
+                if ext in {".pdf"}:
+                    badge_fg = "#F85149"
+                elif ext in {".doc", ".docx", ".txt", ".md"}:
+                    badge_fg = "#58A6FF"
+                elif ext in {".zip", ".rar", ".7z", ".tar", ".gz"}:
+                    badge_fg = "#D29922"
+                elif ext in {".mp3", ".wav", ".flac", ".m4a"}:
+                    badge_fg = "#BC8CFF"
+                elif ext in {".mp4", ".mkv", ".avi", ".mov"}:
+                    badge_fg = "#7EE787"
+
+                badge_lbl = tk.Label(
+                    card,
+                    text=badge_text,
+                    bg=COLOR_SURFACE_0,
+                    fg=badge_fg,
+                    font=FONT_MONO,
+                    padx=4,
+                    pady=6,
+                    relief="flat",
+                    cursor="hand2"
+                )
+                badge_lbl.pack(fill="x", padx=4, pady=(2, 2))
+                badge_lbl.bind("<Double-Button-1>", lambda e, p=filepath: self._safe_open_file(p))
+                card.bind("<Double-Button-1>", lambda e, p=filepath: self._safe_open_file(p))
+
+                ToolTip(card, f"File: {fname}\nSize: {size_str}\nPath: {filepath}\nDouble-click to open file")
+
+            # Filename label below thumbnail (truncated)
+            display_name = fname if len(fname) <= 10 else fname[:7] + "..." + (ext if len(ext) <= 4 else "")
+            name_lbl = tk.Label(
+                card,
+                text=display_name,
+                bg=COLOR_SURFACE_2,
+                fg=COLOR_TEXT_PRIMARY,
+                font=("Segoe UI", 7),
+                anchor="center"
+            )
+            name_lbl.pack(fill="x")
+
+        self.root.update_idletasks()
+
+    def _show_image_preview(self, filepath: str) -> None:
+        """Popup viewer to preview staged image."""
+        if not os.path.exists(filepath):
+            messagebox.showerror("File Not Found", f"Cannot preview: '{filepath}' does not exist.")
+            return
+
+        preview_top = tk.Toplevel(self.root)
+        preview_top.title(f"Image Preview - {os.path.basename(filepath)}")
+        preview_top.geometry("520x560")
+        preview_top.configure(bg=COLOR_SURFACE_0)
+        preview_top.transient(self.root)
+
+        try:
+            with Image.open(filepath) as orig:
+                orig_w, orig_h = orig.size
+                fsize = os.path.getsize(filepath)
+                size_str = f"{fsize/(1024*1024):.2f} MB" if fsize > 1024*1024 else f"{fsize/1024:.1f} KB"
+
+                info_frame = tk.Frame(preview_top, bg=COLOR_SURFACE_1, highlightbackground=COLOR_BORDER, highlightthickness=1)
+                info_frame.pack(fill="x", padx=12, pady=(12, 6))
+
+                tk.Label(
+                    info_frame,
+                    text=os.path.basename(filepath),
+                    bg=COLOR_SURFACE_1,
+                    fg=COLOR_TEXT_PRIMARY,
+                    font=FONT_SANS_BOLD,
+                    anchor="w"
+                ).pack(fill="x", padx=10, pady=(6, 2))
+
+                tk.Label(
+                    info_frame,
+                    text=f"Resolution: {orig_w} × {orig_h} px  •  Size: {size_str}",
+                    bg=COLOR_SURFACE_1,
+                    fg=COLOR_TEXT_SECONDARY,
+                    font=FONT_MONO,
+                    anchor="w"
+                ).pack(fill="x", padx=10, pady=(0, 6))
+
+                display_img = orig.copy()
+                display_img.thumbnail((480, 400), Image.Resampling.LANCZOS)
+                preview_photo = ImageTk.PhotoImage(display_img)
+
+                img_lbl = tk.Label(
+                    preview_top,
+                    image=preview_photo,
+                    bg=COLOR_SURFACE_1,
+                    relief="solid",
+                    bd=1
+                )
+                img_lbl.image = preview_photo
+                img_lbl.pack(padx=12, pady=6, expand=True)
+
+                action_row = tk.Frame(preview_top, bg=COLOR_SURFACE_0)
+                action_row.pack(fill="x", padx=12, pady=10)
+
+                tk.Button(
+                    action_row,
+                    text="Open in Default App",
+                    bg=COLOR_SURFACE_2,
+                    fg=COLOR_TEXT_PRIMARY,
+                    font=FONT_SANS,
+                    relief="flat",
+                    cursor="hand2",
+                    padx=10,
+                    pady=4,
+                    command=lambda: os.startfile(filepath)
+                ).pack(side="left")
+
+                tk.Button(
+                    action_row,
+                    text="Close",
+                    bg=COLOR_ACCENT,
+                    fg="#FFFFFF",
+                    font=FONT_SANS_BOLD,
+                    relief="flat",
+                    cursor="hand2",
+                    padx=14,
+                    pady=4,
+                    command=preview_top.destroy
+                ).pack(side="right")
+
+        except Exception as e:
+            messagebox.showerror("Preview Error", f"Failed to load image preview: {e}")
+            preview_top.destroy()
+
+    def _handle_send_staged(self) -> None:
+        """Send all staged files and/or custom text to the connected device upon explicit click."""
+        text = self.text_input.get("1.0", "end-1c").strip() if self.text_input else ""
+        placeholder_texts = [
+            "Paste or type text to push to phone...",
+            "Type message, or drop files / paste image (Ctrl+V) here..."
+        ]
+        is_valid_text = bool(text and text not in placeholder_texts)
+        has_files = bool(self.staged_files)
+
+        if not has_files and not is_valid_text:
+            messagebox.showinfo(
+                "Nothing to Send",
+                "Please type a text message, drag & drop files, or paste an image (Ctrl+V) first."
+            )
+            return
+
+        # 1. Send staged files if any
+        if has_files:
+            files_to_send = list(self.staged_files)
+            self.clear_staged_files()
+            if self.on_send_files:
+                self.on_send_files(files_to_send)
+            elif self.on_send_file:
+                for f in files_to_send:
+                    self.on_send_file(f)
+
+        # 2. Send custom text if typed
+        if is_valid_text:
+            if self.on_send_text:
+                self.on_send_text(text)
+            if self.text_input:
+                self.text_input.delete("1.0", "end")
+
     def _handle_push_clipboard(self) -> None:
         try:
             content = pyperclip.paste()
@@ -493,21 +1015,13 @@ class QuickWindow:
             messagebox.showerror("Clipboard Error", str(e))
 
     def _handle_send_custom_text(self) -> None:
-        text = self.text_input.get("1.0", "end-1c").strip()
-        if text and text != "Paste or type text to push to phone...":
-            if self.on_send_text:
-                self.on_send_text(text)
-                self.text_input.delete("1.0", "end")
+        self._handle_send_staged()
 
     def _handle_select_file(self) -> None:
-        filenames = filedialog.askopenfilenames(title="Select File(s) to Stream")
+        """Open file dialog and stage selected files without sending immediately."""
+        filenames = filedialog.askopenfilenames(title="Select File(s) to Attach")
         if filenames:
-            file_list = list(filenames)
-            if self.on_send_files:
-                self.on_send_files(file_list)
-            elif self.on_send_file:
-                for f in file_list:
-                    self.on_send_file(f)
+            self.stage_files(list(filenames))
 
     def refresh_offers_ui(self) -> None:
         """Re-render pending RAM transfer offers with remaining TTL."""
@@ -584,13 +1098,19 @@ class QuickWindow:
                 btn_f = tk.Frame(row, bg=COLOR_SURFACE_0)
                 btn_f.pack(fill="x", padx=8, pady=(0, 6))
 
+                is_copied = getattr(offer, "copied", False)
+                btn_copy_text = "Copy Again" if is_copied else "Copy to Clipboard"
+                btn_copy_bg = COLOR_SURFACE_2 if is_copied else COLOR_ACCENT
+                btn_copy_fg = COLOR_TEXT_PRIMARY if is_copied else "#FFFFFF"
+
                 tk.Button(
                     btn_f,
-                    text="Copy to Clipboard",
-                    bg=COLOR_ACCENT,
-                    fg="#FFFFFF",
+                    text=btn_copy_text,
+                    bg=btn_copy_bg,
+                    fg=btn_copy_fg,
                     font=FONT_SANS,
                     relief="flat",
+                    cursor="hand2",
                     padx=6,
                     pady=2,
                     command=lambda tid=offer.transfer_id: self._copy_text(tid)
@@ -603,6 +1123,7 @@ class QuickWindow:
                     fg=COLOR_TEXT_SECONDARY,
                     font=FONT_SANS,
                     relief="flat",
+                    cursor="hand2",
                     padx=6,
                     pady=2,
                     command=lambda tid=offer.transfer_id: self._reject_offer(tid)
@@ -769,7 +1290,7 @@ class QuickWindow:
             self.canvas.yview_moveto(prev_yview[0])
 
     def _copy_text(self, transfer_id: str) -> None:
-        self.server.consume_text(transfer_id)
+        self.server.copy_text(transfer_id)
         self.refresh_offers_ui()
 
     def _accept_file(self, transfer_id: str) -> None:
@@ -844,6 +1365,8 @@ class QuickWindow:
                 elif event_type == "start_outgoing":
                     transfer_id, fname, fsize = data
                     self._ui_start_outgoing(transfer_id, fname, fsize)
+                elif event_type == "files_dropped":
+                    self.stage_files(data)
                 elif event_type == "complete_outgoing":
                     transfer_id, fname, success, error = data
                     self._ui_complete_outgoing(transfer_id, fname, success, error)
@@ -871,13 +1394,19 @@ class QuickWindow:
     def _ui_start_outgoing(self, transfer_id: str, fname: str, fsize: int) -> None:
         if not self.outgoing_frame or not self.root or not self.root.winfo_exists():
             return
-        self.outgoing_frame.pack(fill="x", padx=10, pady=4)
+        if self.transfers_card and self.transfers_card.winfo_exists():
+            self.outgoing_frame.pack(before=self.transfers_card, fill="x", padx=10, pady=(0, 6))
+        else:
+            self.outgoing_frame.pack(fill="x", padx=10, pady=(0, 6))
+
         for child in self.outgoing_frame.winfo_children():
             child.destroy()
 
-        size_str = f"{fsize / (1024*1024):.2f} MB" if fsize > 1024*1024 else f"{fsize / 1024:.1f} KB"
+        header_row = tk.Frame(self.outgoing_frame, bg=COLOR_SURFACE_1)
+        header_row.pack(fill="x", padx=8, pady=(4, 2))
+
         lbl = tk.Label(
-            self.outgoing_frame,
+            header_row,
             text=f"⬆️ Streaming to Phone: {fname} (0%)",
             bg=COLOR_SURFACE_1,
             fg=COLOR_ACCENT,
@@ -885,8 +1414,25 @@ class QuickWindow:
             anchor="w"
         )
         lbl.fname = fname
-        lbl.pack(fill="x", padx=8, pady=(6, 2))
+        lbl.pack(side="left", fill="x", expand=True)
         self.outgoing_progress_labels[transfer_id] = lbl
+
+        dismiss_mini = tk.Button(
+            header_row,
+            text="✕",
+            bg=COLOR_SURFACE_1,
+            fg=COLOR_TEXT_SECONDARY,
+            activebackground=COLOR_SURFACE_2,
+            activeforeground="#FFFFFF",
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+            padx=4,
+            pady=0,
+            command=self._dismiss_outgoing
+        )
+        dismiss_mini.pack(side="right")
 
         pbar = ttk.Progressbar(
             self.outgoing_frame,
@@ -896,50 +1442,61 @@ class QuickWindow:
             maximum=100,
             value=0
         )
-        pbar.pack(fill="x", padx=8, pady=(4, 8))
+        pbar.pack(fill="x", padx=8, pady=(2, 6))
         self.outgoing_progress_bars[transfer_id] = pbar
         self.root.update_idletasks()
 
     def _ui_complete_outgoing(self, transfer_id: str, fname: str, success: bool, error: str = "") -> None:
         if not self.outgoing_frame or not self.root or not self.root.winfo_exists():
             return
+        if self.transfers_card and self.transfers_card.winfo_exists():
+            self.outgoing_frame.pack(before=self.transfers_card, fill="x", padx=10, pady=(0, 6))
+        else:
+            self.outgoing_frame.pack(fill="x", padx=10, pady=(0, 6))
+
         for child in self.outgoing_frame.winfo_children():
             child.destroy()
 
+        header_row = tk.Frame(self.outgoing_frame, bg=COLOR_SURFACE_1)
+        header_row.pack(fill="x", padx=8, pady=(4, 2))
+
         if success:
             lbl = tk.Label(
-                self.outgoing_frame,
+                header_row,
                 text=f"✅ Sent to Phone: {fname} (SHA-256 Verified)",
                 bg=COLOR_SURFACE_1,
                 fg=COLOR_SUCCESS,
                 font=FONT_SANS_BOLD,
                 anchor="w"
             )
-            lbl.pack(fill="x", padx=8, pady=(6, 2))
+            lbl.pack(side="left", fill="x", expand=True)
         else:
             err_msg = f": {error}" if error else ""
             lbl = tk.Label(
-                self.outgoing_frame,
+                header_row,
                 text=f"❌ Failed to stream {fname}{err_msg}",
                 bg=COLOR_SURFACE_1,
                 fg=COLOR_DANGER,
                 font=FONT_SANS_BOLD,
                 anchor="w"
             )
-            lbl.pack(fill="x", padx=8, pady=(6, 2))
+            lbl.pack(side="left", fill="x", expand=True)
 
         btn = tk.Button(
-            self.outgoing_frame,
-            text="Dismiss",
+            header_row,
+            text="✕ Dismiss",
             bg=COLOR_SURFACE_2,
             fg=COLOR_TEXT_SECONDARY,
+            activebackground=COLOR_BORDER,
             font=FONT_SANS,
             relief="flat",
+            cursor="hand2",
             padx=6,
-            pady=2,
+            pady=1,
             command=self._dismiss_outgoing
         )
-        btn.pack(padx=8, pady=(2, 6), anchor="w")
+        btn.pack(side="right", padx=(4, 0))
+
         self.outgoing_progress_bars.pop(transfer_id, None)
         self.outgoing_progress_labels.pop(transfer_id, None)
         self.root.update_idletasks()
@@ -982,7 +1539,7 @@ class QuickWindow:
         if not self.root or not self.root.winfo_exists():
             return
         if self.server and self.server.pending_offers:
-            current_signature = "|".join(f"{t.transfer_id}:{t.state}" for t in self.server.pending_offers.values())
+            current_signature = "|".join(f"{t.transfer_id}:{t.state}:{getattr(t, 'copied', False)}" for t in self.server.pending_offers.values())
             if current_signature != self.last_offers_signature:
                 self.last_offers_signature = current_signature
                 self.refresh_offers_ui()

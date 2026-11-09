@@ -33,6 +33,7 @@ hidden_imports = list(set([
     'PIL.Image',
     'PIL.ImageTk',
     'PIL.ImageDraw',
+    'PIL.ImageGrab',
     'tkinter',
     'tkinter.ttk',
     'tkinter.filedialog',

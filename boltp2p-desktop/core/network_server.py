@@ -76,6 +76,7 @@ class PendingTransfer:
         self.bytes_transferred = 0
         self.total_bytes = metadata.get("size", 0)
         self.timer_stopped = False
+        self.copied = False
 
     def remaining_ttl(self) -> int:
         if self.timer_stopped or self.state in ("DOWNLOADING", "COMPLETED", "REJECTED"):
@@ -359,20 +360,24 @@ class BoltP2PServer:
             return True
         return False
 
-    def consume_text(self, transfer_id: str) -> Optional[str]:
-        """Copy received ephemeral text payload to clipboard and wipe RAM."""
+    def copy_text(self, transfer_id: str) -> Optional[str]:
+        """Copy received ephemeral text payload to clipboard and mark as copied without removing from RAM buffer."""
         if transfer_id in self.pending_offers:
-            item = self.pending_offers.pop(transfer_id)
+            item = self.pending_offers[transfer_id]
             if item.payload_data:
                 try:
                     text = item.payload_data.decode("utf-8")
                     pyperclip.copy(text)
-                    item.purge_memory()
-                    logger.info("Text copied to clipboard and purged from memory: %s", transfer_id)
+                    item.copied = True
+                    logger.info("Text copied to clipboard (retained in 10m RAM buffer): %s", transfer_id)
                     return text
                 except Exception as e:
                     logger.error("Failed to copy text to clipboard: %s", e)
         return None
+
+    def consume_text(self, transfer_id: str) -> Optional[str]:
+        """Copy received ephemeral text payload to clipboard and retain in 10m RAM buffer."""
+        return self.copy_text(transfer_id)
 
     async def _stream_incoming_file(
         self,
