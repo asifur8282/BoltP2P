@@ -18,7 +18,30 @@
 
 ---
 
-## 2. System Architecture & Wire Protocol
+## 2. Key Features
+
+### 🖥️ Windows Desktop Daemon (v1.1.1)
+- **Universal Input & Staging Area:** 
+  - **Drag-and-Drop:** Drag files directly from File Explorer into the quick window.
+  - **Clipboard Image Pasting (`Ctrl+V`):** Take a screenshot or copy an image anywhere, press `Ctrl+V` in BoltP2P to stage it immediately.
+  - **Visual Thumbnails & Badges:** Image thumbnails (with modal preview on click) and document badges (`PDF`, `DOCX`, `ZIP`, etc., with double-click to launch). Individual removal (`✕`) on badges.
+  - **Explicit Send:** Files and custom text remain safely staged until you click **"Send to Connected Device"**—no unintended auto-sending.
+- **Per-Monitor DPI Awareness (V2):** Native `shcore.SetProcessDpiAwareness(2)` ensures crisp UI fonts, sharp borders, and high-DPI scaling across multi-monitor setups without Windows bitmap blur.
+- **Persistent Text Offers with "Copy Again":** Inbound text snippets remain in the 10-minute volatile RAM buffer even after copying to clipboard; the action button smoothly toggles to **"Copy Again"** with secondary styling.
+- **Integrated Outgoing Stream Monitor:** Real-time upload progress bar positioned right below Quick Send with instant `✕ Dismiss` controls.
+- **System Tray Daemon:** Runs quietly in the notification area with a dynamic connection status icon, quick clipboard push, and native Windows 11 actionable toast notifications.
+- **Pairing & PIN:** Instant QR code display and 6-digit PIN verification for rapid mobile onboarding.
+
+### 📱 Android Mobile Client (v1.1.0)
+- **Live Camera Shutter Stream:** Viewfinder captures JPEG frames straight to volatile `ByteBuffer` and streams directly to PC with zero intermediate storage writes.
+- **Quick Clipboard Push:** Auto-detects copied text on app focus with a one-tap **"Push Clipboard to PC Now"** tile.
+- **Arbitrary File Streaming:** Send any image, video, document, or archive from the system file picker.
+- **Auto-Discovery (mDNS / NSD):** Automatically detects the desktop daemon on the Wi-Fi subnet (`_boltp2p._tcp.local.`), with manual IP/port override support.
+- **Ephemeral RAM Buffer:** Incoming file offers countdown with a live 10-minute timer. Offers can be accepted, downloaded with real-time progress, or dismissed.
+
+---
+
+## 3. System Architecture & Wire Protocol
 
 ```
 +---------------------------------------------------------------------------------+
@@ -72,7 +95,7 @@ Every packet transmitted over the socket begins with a fixed 18-byte big-endian 
 
 ---
 
-## 3. Environment & Prerequisites
+## 4. Environment & Prerequisites
 
 - **Host OS:** Windows 11 (x64)
 - **Python:** 3.11 or 3.14 (Native 64-bit)
@@ -94,9 +117,9 @@ $env:PATH = "C:\Android\platform-tools;C:\Android\cmdline-tools\latest\bin;$env:
 
 ---
 
-## 4. Quick Start & Execution Guide
+## 5. Quick Start & Execution Guide
 
-### 4.1 Running the Windows 11 Desktop Daemon
+### 5.1 Running the Windows 11 Desktop Daemon
 
 1. Navigate to the desktop directory:
    ```powershell
@@ -113,12 +136,12 @@ $env:PATH = "C:\Android\platform-tools;C:\Android\cmdline-tools\latest\bin;$env:
    python main.py
    ```
    - The daemon will minimize to the system tray with a geometric status icon.
-   - Right-click the tray icon to **"Open BoltP2P"** (bringing up the 460x600 quick window), **"Push Clipboard to Phone"**, or **"Send File..."**.
+   - Right-click the tray icon to **"Open BoltP2P"** (bringing up the 460x700 quick window), **"Push Clipboard to Phone"**, or **"Send File..."**.
    - Native Windows 11 actionable notifications will automatically trigger when text or files arrive.
 
 ---
 
-### 4.2 Building & Deploying the Android Mobile Client
+### 5.2 Building & Deploying the Android Mobile Client
 
 1. Verify physical phone is connected via ADB:
    ```powershell
@@ -148,7 +171,7 @@ $env:PATH = "C:\Android\platform-tools;C:\Android\cmdline-tools\latest\bin;$env:
 
 ---
 
-### 4.3 Compiling Standalone Windows 11 Executable (`BoltP2P.exe`)
+### 5.3 Compiling Standalone Windows 11 Executable (`BoltP2P.exe`)
 
 To build the windowless, standalone `.exe`:
 
@@ -175,7 +198,7 @@ To build the windowless, standalone `.exe`:
 
 ---
 
-## 5. Mobile Client Usage
+## 6. Mobile Client Usage
 
 - **Camera Direct Shutter:** Tap the shutter button in the center viewfinder. The camera captures the JPEG into a memory `ByteBuffer` and immediately streams it to your PC. A slim 2px progress bar on top tracks transmission.
 - **Quick Clipboard Push:** When you copy text anywhere on Android and open BoltP2P, the clipboard snippet is automatically detected. Tap **"Push Clipboard to PC Now"** to instantly dispatch it to Windows.
@@ -184,7 +207,7 @@ To build the windowless, standalone `.exe`:
 
 ---
 
-## 6. Troubleshooting & Diagnostics
+## 7. Troubleshooting & Diagnostics
 
 | Issue | Cause | Solution |
 | :--- | :--- | :--- |
