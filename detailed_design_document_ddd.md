@@ -108,14 +108,16 @@ Every packet transmitted over the socket uses a fixed 18-byte big-endian header:
 ### 4.1 Component Layout
 ```text
 boltp2p-desktop/
-├── main.py              # Application entry point & tray runner
+├── main.py              # Application entry point, DPI awareness (V2) & tray runner
 ├── requirements.txt     # Minimal dependencies
 ├── config.json          # Persistent paired device public keys / tokens
+├── boltp2p.spec         # PyInstaller standalone compilation spec
 ├── core/
 │   ├── network_server.py # Asynchronous TLS socket server & frame parser
 │   ├── discovery.py      # Zeroconf / mDNS broadcaster
 │   └── crypto.py         # Key pair generation & SHA-256 utilities
 └── ui/
+    ├── quick_window.py   # Utilitarian quick window (DPI V2, drag & drop, staging, stream monitor)
     ├── tray_manager.py   # Windows notification area tray integration
     └── notifier.py       # Windows 11 native toast notifications
 ```
@@ -150,6 +152,7 @@ class PendingTransfer:
         self.created_at = time.time()
         self.ttl = 600  # 10 minutes strictly
         self.accepted = False
+        self.copied = False
 
 class BoltP2PServer:
     def __init__(self, host: str = "0.0.0.0", port: int = 58241, save_dir: str = "./Downloads"):
@@ -157,6 +160,21 @@ class BoltP2PServer:
         self.port = port
         self.save_dir = save_dir
         self.pending_offers: Dict[str, PendingTransfer] = {}
+
+    def copy_text(self, transfer_id: str) -> Optional[str]:
+        """Copy received ephemeral text payload to clipboard and mark copied without purging RAM."""
+        if transfer_id in self.pending_offers:
+            item = self.pending_offers[transfer_id]
+            if item.payload_data:
+                text = item.payload_data.decode("utf-8")
+                pyperclip.copy(text)
+                item.copied = True
+                return text
+        return None
+
+    def consume_text(self, transfer_id: str) -> Optional[str]:
+        """Backwards-compatible text copy."""
+        return self.copy_text(transfer_id)
 
     async def start(self):
         self.server = await asyncio.start_server(self.handle_connection, self.host, self.port)

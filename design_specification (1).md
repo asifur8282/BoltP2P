@@ -79,38 +79,51 @@ A monochromatic, content-first base with a surgical signal color for status and 
 
 ## 4. Desktop Interface Layout (Windows 11)
 
-### 4.1 Window Blueprint (Compact Utility Window: `460px × 600px`)
-The desktop client is not an expansive website wrapped in an electron frame. It behaves like a native, precision tool (e.g., Process Hacker, PuTTY, or Obsidian's settings drawer).
+### 4.1 Window Blueprint (Compact Utility Window: `460px × 700px`, min `460px × 480px`)
+The desktop client is not an expansive website wrapped in an electron frame. It behaves like a native, precision tool (e.g., Process Hacker, PuTTY, or Obsidian's settings drawer). It features native Per-Monitor DPI Awareness (V2) via `shcore.SetProcessDpiAwareness(2)` for razor-sharp rendering on scaled displays.
 
 ```
 +-------------------------------------------------------------+
 | BoltP2P [Desktop Daemon]               [ - ] [ # ] [ X ]    |  <- 32px Native Titlebar
 +-------------------------------------------------------------+
-| [● ONLINE] Connected to: Pixel 8 Pro (192.168.1.42)         |  <- 36px Status Header
+| [● ONLINE] Connected: Android Client (192.168.1.104) [Disc] |  <- 36px Status Header
 +-------------------------------------------------------------+
-| QUICK SEND                                                  |
-| +---------------------------------------------------------+ |
-| | [ Paste or type text to push to phone...              ] | |  <- Monospace/Sans input
-| +---------------------------------------------------------+ |
-| [ Push Clipboard ]               [ Select & Stream File ]   |  <- Crisp 1px bordered btns
+| PAIRING & CONNECTION                                        |
+| [ QR Code ]  Local IP: 192.168.1.103  Port: 58241           |
+|              PIN Code: 462895                               |
+|              [ Connect to Remote Device (IP/QR) ]           |
 +-------------------------------------------------------------+
-| ACTIVE / RECENT TRANSFERS (10m Ephemeral RAM Window)        |
+| GENERAL INPUT & QUICK SEND                                  |
+| +---------------------------------------------------------+ |
+| | Type message, or drop files / paste image (Ctrl+V)...   | |  <- Multiline / Drop target
+| +---------------------------------------------------------+ |
+| | [🖼️ Img Thumbnail] [📄 Document.pdf ✕]                   | |  <- Horizontal Staging Area
+| +---------------------------------------------------------+ |
+| [ Send to Connected Device ]   [📎 Attach ]  [📋 Clipboard] |  <- Explicit send action
++-------------------------------------------------------------+
+| OUTGOING STREAM (Active Transfer Monitor)                   |
+| ⬆️ Streaming to Phone: file.zip (45%)           [✕ Dismiss] |  <- Real-time monitor
+| [====================>                                    ] |
++-------------------------------------------------------------+
+| ACTIVE / RECENT OFFERS (10m Ephemeral RAM Window)           |
 | +---------------------------------------------------------+ |
 | | 📷 IMG_20261101_0341.jpg (3.2 MB)                       | |
 | | From: Phone  •  Expires in: 08:42                       | |
-| | [ Accept & Save ]                      [ Reject ]       | |  <- Direct action row
+| | [ Accept & Save ]  [ Accept All ]  [ Reject ]           | |  <- Action row
 | +---------------------------------------------------------+ |
-| | 📋 "https://github.com/torvalds/linux"                  | |
-| | Text  •  Expires in: 04:19                              | |
-| | [ Copy to Clipboard ]                  [ Dismiss ]      | |
+| | 📋 Text: "Meeting Room 402 Code: 9912"                   | |
+| | Expires in: 09:55                                       | |
+| | [ Copy to Clipboard / Copy Again ]     [ Dismiss ]      | |  <- Persistent until expired/dismissed
 | +---------------------------------------------------------+ |
 +-------------------------------------------------------------+
-| [Settings] [Show Pairing QR]           Auto-Accept Text [x] |  <- Bottom status bar
+| [ Open Downloads ]      Auto-Accept Text [x] Auto-Files [ ] |  <- Pinned bottom bar
 +-------------------------------------------------------------+
 ```
 
 ### 4.2 Interactive Components & State Behaviors
-- **Action Buttons:** Flat surfaces with explicit `1px solid #30363D` borders. On hover: surface brightness shifts +5%. On click: instant `-1px` translate down or border darkening (mechanical feel).
+- **Action Buttons:** Flat surfaces with explicit `1px solid #30363D` borders. On hover: surface brightness shifts +5%. On click: instant mechanical click response.
+- **Universal Input Staging:** Dragging files or pressing `Ctrl+V` (image) generates staged items in a horizontal strip without transmitting immediately. Transmission triggers only upon pressing **"Send to Connected Device"**.
+- **Persistent Text Offers:** Inbound text payloads remain stored in the 10-minute volatile RAM buffer after copying to clipboard; the primary button dynamically transitions to **"Copy Again"** (secondary surface).
 - **TTL Countdown Display:** Displayed as `mm:ss` in a fixed-width monospace font (`Google Sans` tabular or native `Consolas`). Color stays `text-secondary` until `< 60s`, where it turns `signal-warning`.
 - **System Tray Icon:**
   - Dim outline: Offline/Listening.

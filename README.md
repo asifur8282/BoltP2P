@@ -41,7 +41,18 @@
 
 ---
 
-## 3. System Architecture & Wire Protocol
+## 3. Pre-Compiled Releases
+
+Pre-compiled standalone binaries are available on GitHub Releases (no Python, Android Studio, or toolchain required):
+
+| Platform | Binary | Version | Notes |
+| :--- | :--- | :--- | :--- |
+| **Windows 11** | `BoltP2P-Windows-v1.1.1.exe` | **v1.1.1** | Standalone single-file executable with DPI awareness, tray icon, and staging. |
+| **Android** | `BoltP2P-Android-v1.1.0.apk` | **v1.1.0** | Compatible with Android 8.0+ (API 26 to 34). |
+
+---
+
+## 4. System Architecture & Wire Protocol
 
 ```
 +---------------------------------------------------------------------------------+
@@ -95,7 +106,7 @@ Every packet transmitted over the socket begins with a fixed 18-byte big-endian 
 
 ---
 
-## 4. Environment & Prerequisites
+## 5. Environment & Prerequisites
 
 - **Host OS:** Windows 11 (x64)
 - **Python:** 3.11 or 3.14 (Native 64-bit)
@@ -117,13 +128,13 @@ $env:PATH = "C:\Android\platform-tools;C:\Android\cmdline-tools\latest\bin;$env:
 
 ---
 
-## 5. Quick Start & Execution Guide
+## 6. Quick Start & Execution Guide
 
-### 5.1 Running the Windows 11 Desktop Daemon
+### 6.1 Running the Windows 11 Desktop Daemon
 
 1. Navigate to the desktop directory:
    ```powershell
-   cd D:\Crossdrop\boltp2p-desktop
+   cd boltp2p-desktop
    ```
 
 2. Install dependencies:
@@ -141,7 +152,7 @@ $env:PATH = "C:\Android\platform-tools;C:\Android\cmdline-tools\latest\bin;$env:
 
 ---
 
-### 5.2 Building & Deploying the Android Mobile Client
+### 6.2 Building & Deploying the Android Mobile Client
 
 1. Verify physical phone is connected via ADB:
    ```powershell
@@ -151,7 +162,7 @@ $env:PATH = "C:\Android\platform-tools;C:\Android\cmdline-tools\latest\bin;$env:
 
 2. Navigate to the android client directory:
    ```powershell
-   cd D:\Crossdrop\boltp2p-android
+   cd boltp2p-android
    ```
 
 3. Compile the debug APK using the headless Gradle wrapper:
@@ -171,13 +182,13 @@ $env:PATH = "C:\Android\platform-tools;C:\Android\cmdline-tools\latest\bin;$env:
 
 ---
 
-### 5.3 Compiling Standalone Windows 11 Executable (`BoltP2P.exe`)
+### 6.3 Compiling Standalone Windows 11 Executable (`BoltP2P.exe`)
 
 To build the windowless, standalone `.exe`:
 
 1. Navigate to the desktop directory:
    ```powershell
-   cd D:\Crossdrop\boltp2p-desktop
+   cd boltp2p-desktop
    ```
 
 2. Run the packaging script:
@@ -188,7 +199,7 @@ To build the windowless, standalone `.exe`:
 
 3. The standalone binary is produced at:
    ```
-   D:\Crossdrop\boltp2p-desktop\dist\BoltP2P.exe
+   boltp2p-desktop\dist\BoltP2P.exe
    ```
 
 4. Launch the binary in the background:
@@ -198,7 +209,7 @@ To build the windowless, standalone `.exe`:
 
 ---
 
-## 6. Mobile Client Usage
+## 7. Mobile Client Usage
 
 - **Camera Direct Shutter:** Tap the shutter button in the center viewfinder. The camera captures the JPEG into a memory `ByteBuffer` and immediately streams it to your PC. A slim 2px progress bar on top tracks transmission.
 - **Quick Clipboard Push:** When you copy text anywhere on Android and open BoltP2P, the clipboard snippet is automatically detected. Tap **"Push Clipboard to PC Now"** to instantly dispatch it to Windows.
@@ -207,7 +218,7 @@ To build the windowless, standalone `.exe`:
 
 ---
 
-## 7. Troubleshooting & Diagnostics
+## 8. Troubleshooting & Diagnostics
 
 | Issue | Cause | Solution |
 | :--- | :--- | :--- |

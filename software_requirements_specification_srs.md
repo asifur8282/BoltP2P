@@ -57,10 +57,11 @@ The user requires fast, ad-hoc, and private cross-device data movement across th
 | **FR-02** | **LAN Device Auto-Discovery:** Paired devices must automatically detect each other upon connecting to the same Wi-Fi network via mDNS without manual IP entry. | High |
 | **FR-03** | **Persistent Pipe & Keep-Alive:** The transport pipe must maintain an authenticated, idle state to enable immediate transfers without renegotiation overhead. | High |
 | **FR-04** | **Instant Camera Transfer:** Mobile app must feature a one-tap camera shutter that immediately sends the captured frame to the PC without writing an image file to mobile flash storage. | High |
-| **FR-05** | **Bidirectional Text/Clipboard Push:** Pasting or typing text on either device must instantly push to the peer, triggering an OS toast notification with a direct "Copy to Clipboard" action. | High |
+| **FR-05** | **Bidirectional Text/Clipboard Push:** Pasting or typing text on either device must instantly push to the peer, triggering an OS toast notification with a direct "Copy to Clipboard" action. Inbound text offers are retained in the 10-minute RAM buffer with a dynamic "Copy Again" state until dismissed or timed out. | High |
 | **FR-06** | **Arbitrary File Transfer:** Both endpoints must support selecting and streaming binary files of arbitrary size with transfer progress indicators. | High |
 | **FR-07** | **Interactive Recipient Approval:** Inbound file and image transfers must prompt the recipient for approval before binary data is written to disk. | High |
 | **FR-08** | **Active Pipeline Hold-Open:** Once the receiver clicks "Accept" or "Download", the underlying network socket must remain held open in an active transfer lock until transmission and SHA-256 integrity verification are completed. | High |
+| **FR-09** | **Universal Desktop Input & Staging:** Desktop client must support native Win32 drag-and-drop file ingestion, clipboard image pasting (`Ctrl+V`) with live thumbnails, document badges with double-click launch, and manual transmission trigger via "Send to Connected Device". | High |
 
 ---
 
@@ -80,3 +81,4 @@ The user requires fast, ad-hoc, and private cross-device data movement across th
 #### 3.2.3 Performance & Resource Constraints
 - **NFR-05 (Low Memory Footprint):** The Windows desktop process must consume under 40 MB of RAM while idling in the system tray.
 - **NFR-06 (Mobile Storage Footprint):** Compiled Android APK release build must not exceed 15 MB in size.
+- **NFR-07 (Per-Monitor High-DPI Fidelity):** Desktop application must register Windows Per-Monitor DPI awareness (V2) prior to window initialization to guarantee razor-sharp text, mechanical borders, and proper scaling on high-resolution displays.
