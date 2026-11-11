@@ -26,7 +26,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -82,6 +84,43 @@ fun getLocalWifiIp(): String {
         }
     } catch (_: Exception) {}
     return "127.0.0.1"
+}
+
+fun openDownloadsFolder(context: Context) {
+    try {
+        val intent = Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        context.startActivity(intent)
+        return
+    } catch (_: Exception) {}
+
+    try {
+        val downloadsUri = Uri.parse("content://com.android.externalstorage.documents/document/primary:Download")
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(downloadsUri, "vnd.android.document/directory")
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+        }
+        context.startActivity(intent)
+        return
+    } catch (_: Exception) {}
+
+    try {
+        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        val uri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            downloadsDir
+        )
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "*/*")
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+        }
+        context.startActivity(intent)
+        return
+    } catch (_: Exception) {}
+
+    Toast.makeText(context, "Downloads: Internal Storage > Download", Toast.LENGTH_LONG).show()
 }
 
 fun openFileOrContent(context: Context, item: SessionSharedItem) {
@@ -165,6 +204,7 @@ fun MainScreen(
     }
 
     var imageCapture: ImageCapture? by remember { mutableStateOf(null) }
+    var useFrontCamera by remember { mutableStateOf(false) }
     var transferProgress by remember { mutableFloatStateOf(0f) }
     var isStreaming by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("") }
@@ -768,32 +808,80 @@ fun MainScreen(
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     if (hasCameraPermission) {
-                        AndroidView(
-                            factory = { ctx ->
-                                val previewView = PreviewView(ctx)
-                                val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-                                cameraProviderFuture.addListener({
-                                    val cameraProvider = cameraProviderFuture.get()
-                                    val preview = Preview.Builder().build().also {
-                                        it.setSurfaceProvider(previewView.surfaceProvider)
-                                    }
-                                    val capture = ImageCapture.Builder()
-                                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                                        .build()
-                                    imageCapture = capture
+                        key(useFrontCamera) {
+                            AndroidView(
+                                factory = { ctx ->
+                                    val previewView = PreviewView(ctx)
+                                    val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+                                    cameraProviderFuture.addListener({
+                                        val cameraProvider = cameraProviderFuture.get()
+                                        val preview = Preview.Builder().build().also {
+                                            it.setSurfaceProvider(previewView.surfaceProvider)
+                                        }
+                                        val capture = ImageCapture.Builder()
+                                            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                                            .build()
+                                        imageCapture = capture
 
-                                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-                                    try {
-                                        cameraProvider.unbindAll()
-                                        cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, capture)
-                                    } catch (e: Exception) {
-                                        e.printStackTrace()
-                                    }
-                                }, ContextCompat.getMainExecutor(ctx))
-                                previewView
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
+                                        val cameraSelector = if (useFrontCamera && cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
+                                            CameraSelector.DEFAULT_FRONT_CAMERA
+                                        } else {
+                                            CameraSelector.DEFAULT_BACK_CAMERA
+                                        }
+                                        try {
+                                            cameraProvider.unbindAll()
+                                            cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, capture)
+                                        } catch (e: Exception) {
+                                            e.printStackTrace()
+                                        }
+                                    }, ContextCompat.getMainExecutor(ctx))
+                                    previewView
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        // Front/Back Indicator Badge
+                        Surface(
+                            color = CarbonElevated.copy(alpha = 0.85f),
+                            shape = RoundedCornerShape(4.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(10.dp)
+                        ) {
+                            Text(
+                                text = if (useFrontCamera) "FRONT CAM" else "BACK CAM",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (useFrontCamera) BrandAccent else TextSecondary,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                            )
+                        }
+
+                        // Flip Camera Switch Button
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(end = 16.dp, bottom = 18.dp)
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(CarbonElevated.copy(alpha = 0.85f))
+                                .border(1.dp, BorderSubtle, CircleShape)
+                                .clickable(enabled = !isStreaming) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    useFrontCamera = !useFrontCamera
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Cameraswitch,
+                                contentDescription = if (useFrontCamera) "Switch to Back Camera" else "Switch to Front Camera",
+                                tint = if (useFrontCamera) BrandAccent else Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                     } else {
                         Column(
                             modifier = Modifier
@@ -1235,6 +1323,38 @@ fun MainScreen(
                     }
                 }
             }
+        }
+
+        // Open Downloads Folder Button
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                openDownloadsFolder(context)
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+            shape = RoundedCornerShape(6.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+            colors = ButtonDefaults.outlinedButtonColors(
+                containerColor = CarbonSurface,
+                contentColor = TextPrimary
+            )
+        ) {
+            Icon(
+                imageVector = Icons.Default.FolderOpen,
+                contentDescription = "Open Downloads",
+                modifier = Modifier.size(20.dp),
+                tint = BrandAccent
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = "Open Downloads Folder",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = TextPrimary
+            )
         }
 
         // Live Status Message

@@ -32,7 +32,9 @@
 - **System Tray Daemon:** Runs quietly in the notification area with a dynamic connection status icon, quick clipboard push, and native Windows 11 actionable toast notifications.
 - **Pairing & PIN:** Instant QR code display and 6-digit PIN verification for rapid mobile onboarding.
 
-### 📱 Android Mobile Client (v1.2.0)
+### 📱 Android Mobile Client (v1.2.1)
+- **Front & Back Camera Toggle:** One-tap camera flip button on the viewfinder overlay with live `FRONT CAM` / `BACK CAM` status badge to easily stream selfies or environment photos directly to PC.
+- **One-Tap "Open Downloads Folder":** Prominent quick-access button right below Session Shared History to immediately launch the Android system Downloads file explorer.
 - **System Share Sheet Integration:** Appears in the native Android **"Share"** menu (`ACTION_SEND` and `ACTION_SEND_MULTIPLE`) across any app (Gallery, WhatsApp, Files, Browser) to stream shared files or text directly to PC with a single tap.
 - **Immediate MediaStore Recents Discoverability:** Downloaded files are saved cleanly into the public `Download` directory and immediately indexed via Android `MediaScannerConnection`—instantly visible in WhatsApp, Instagram, Telegram, and Android Recents file pickers.
 - **Live Camera Shutter Stream:** Viewfinder captures JPEG frames straight to volatile `ByteBuffer` and streams directly to PC with zero intermediate storage writes.
@@ -49,8 +51,9 @@ Pre-compiled standalone binaries are available in the [`release/`](release/) fol
 
 | Platform | Binary | Version | Notes |
 | :--- | :--- | :--- | :--- |
+| **Android** | `JiffBoltP2P-Android-v1.2.1.apk` | **v1.2.1** | Front/Back camera toggle, Open Downloads Folder button, Share Sheet & MediaStore Recents. |
 | **Windows 11** | `JiffBoltP2P-Windows-v1.2.0.exe` | **v1.2.0** | Standalone single-file executable with DPI awareness, tray icon, staging, and outgoing monitor. |
-| **Android** | `JiffBoltP2P-Android-v1.2.0.apk` | **v1.2.0** | System Share Sheet support, public Downloads with MediaStore indexing for instant Recents visibility. |
+| **Android (v1.2.0)** | `JiffBoltP2P-Android-v1.2.0.apk` | **v1.2.0** | Initial rebrand release with Share Sheet & MediaStore. |
 | **Windows 11 (Legacy)** | `BoltP2P-Windows-v1.1.1.exe` | **v1.1.1** | Prior stable desktop release. |
 | **Android (Legacy)** | `BoltP2P-Android-v1.1.0.apk` | **v1.1.0** | Prior stable mobile release. |
 
