@@ -213,8 +213,8 @@ class JiffBoltP2PAndroidServer(
                     }.toString().toByteArray(Charsets.UTF_8)
                     writeFrame(outStream, TYPE_ACCEPT, acceptMeta, ByteArray(0))
 
-                    // 2. Stream chunks directly to public Downloads folder
-                    val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    // 2. Stream chunks directly to dedicated Download/JiffBoltP2P folder
+                    val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "JiffBoltP2P")
                     if (!downloadsDir.exists()) downloadsDir.mkdirs()
                     var targetFile = File(downloadsDir, filename)
                     if (!targetFile.canonicalPath.startsWith(downloadsDir.canonicalPath)) {
@@ -288,7 +288,7 @@ class JiffBoltP2PAndroidServer(
                         } catch (_: Exception) {}
 
                         mainHandler.post {
-                            Toast.makeText(context, "JiffBoltP2P: Saved ${targetFile.name} to Downloads", Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, "JiffBoltP2P: Saved ${targetFile.name} to Download/JiffBoltP2P", Toast.LENGTH_LONG).show()
                             ForegroundService.postDownloadCompleteNotification(context, targetFile)
                             onDownloadComplete?.invoke(targetFile, true)
                         }

@@ -87,16 +87,15 @@ fun getLocalWifiIp(): String {
 }
 
 fun openDownloadsFolder(context: Context) {
-    try {
-        val intent = Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        }
-        context.startActivity(intent)
-        return
-    } catch (_: Exception) {}
+    val jiffDir = File(
+        android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
+        "JiffBoltP2P"
+    )
+    if (!jiffDir.exists()) jiffDir.mkdirs()
 
+    // 1. Try DocumentsUI URI specifically targeting Download/JiffBoltP2P
     try {
-        val downloadsUri = Uri.parse("content://com.android.externalstorage.documents/document/primary:Download")
+        val downloadsUri = Uri.parse("content://com.android.externalstorage.documents/document/primary:Download%2FJiffBoltP2P")
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(downloadsUri, "vnd.android.document/directory")
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
@@ -105,12 +104,12 @@ fun openDownloadsFolder(context: Context) {
         return
     } catch (_: Exception) {}
 
+    // 2. Try FileProvider URI on jiffDir
     try {
-        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
         val uri = FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",
-            downloadsDir
+            jiffDir
         )
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "*/*")
@@ -120,7 +119,16 @@ fun openDownloadsFolder(context: Context) {
         return
     } catch (_: Exception) {}
 
-    Toast.makeText(context, "Downloads: Internal Storage > Download", Toast.LENGTH_LONG).show()
+    // 3. Fallback: DownloadManager.ACTION_VIEW_DOWNLOADS
+    try {
+        val intent = Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        context.startActivity(intent)
+        return
+    } catch (_: Exception) {}
+
+    Toast.makeText(context, "Downloads: Internal Storage > Download > JiffBoltP2P", Toast.LENGTH_LONG).show()
 }
 
 fun openFileOrContent(context: Context, item: SessionSharedItem) {

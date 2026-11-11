@@ -206,7 +206,7 @@ class ForegroundService : Service() {
 
             val notification = NotificationCompat.Builder(context, CHANNEL_ID_ALERTS)
                 .setContentTitle("Download Complete: ${file.name}")
-                .setContentText("Saved to Downloads • Tap to open")
+                .setContentText("Saved to Download/JiffBoltP2P • Tap to open")
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)

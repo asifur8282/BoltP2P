@@ -124,7 +124,7 @@ class MainActivity : ComponentActivity() {
                         sharedHistory.add(0, SessionSharedItem(
                             id = java.util.UUID.randomUUID().toString(),
                             title = file.name,
-                            subtitle = "Downloads ($sizeStr) • Tap to Open",
+                            subtitle = "Download/JiffBoltP2P ($sizeStr) • Tap to Open",
                             isOutgoing = false,
                             type = "FILE",
                             filePath = file.absolutePath
