@@ -1,4 +1,4 @@
-﻿package com.jiffboltp2p.client.ui
+package com.jiffboltp2p.client.ui
 
 import android.content.Context
 import android.content.Intent
