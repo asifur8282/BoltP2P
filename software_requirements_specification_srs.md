@@ -1,6 +1,6 @@
 # Software Requirements Specification (SRS)
-## Project: BoltP2P (Ultra-Lightweight P2P Cross-Device Sync)
-**Version:** 1.0  
+## Project: JiffBoltP2P (Ultra-Lightweight P2P Cross-Device Sync)
+**Version:** 1.2.0  
 **Target Environment:** Windows 11 & Android 14 (API 34)  
 **Development Toolchain:** Android CLI + JDK 21 / Python 3.11+  
 
@@ -9,15 +9,17 @@
 ## 1. Introduction
 
 ### 1.1 Purpose
-This document specifies the software requirements for **BoltP2P**, a zero-cloud, peer-to-peer (P2P) local synchronization utility operating directly between an Android smartphone and a Windows 11 PC on the same Local Area Network (LAN). The solution addresses the need for instantaneous file, image, and text transfer without intermediate transit platforms (WhatsApp, email, cloud drives).
+This document specifies the software requirements for **JiffBoltP2P**, a zero-cloud, peer-to-peer (P2P) local synchronization utility operating directly between an Android smartphone and a Windows 11 PC on the same Local Area Network (LAN). The solution addresses the need for instantaneous file, image, and text transfer without intermediate transit platforms (WhatsApp, email, cloud drives).
 
 ### 1.2 Scope
-BoltP2P provides:
+JiffBoltP2P provides:
 - One-time initial device pairing via QR code or numeric PIN.
 - Persistent LAN device discovery and connection maintenance without repeated pairing steps.
 - Direct-from-camera photo capture and transfer with zero device-side intermediate caching.
 - Bi-directional text and clipboard dispatch with native OS toast alerts and one-tap copy actions.
 - Arbitrary binary file transfer featuring pre-transfer consent, in-memory ephemeral hold windows, and active-stream locking.
+- Android System Share Sheet receiver (`ACTION_SEND`, `ACTION_SEND_MULTIPLE`) for instant streaming from other apps.
+- Native Android MediaStore indexing so downloaded files immediately appear in WhatsApp, Instagram, Telegram, and Recents pickers.
 
 ### 1.3 Definitions, Acronyms, and Abbreviations
 - **P2P:** Peer-to-Peer
@@ -33,8 +35,8 @@ BoltP2P provides:
 ## 2. Overall Description
 
 ### 2.1 Product Perspective
-BoltP2P operates as a lightweight distributed application composed of two endpoints:
-1. **Desktop Daemon:** A low-overhead Python background process (system tray + native notification hooks) on Windows 11.
+JiffBoltP2P operates as a lightweight distributed application composed of two endpoints:
+1. **Desktop Daemon:** A low-overhead Python background process (system tray + native notification hooks + Tkinter quick utility window with Per-Monitor DPI V2 awareness) on Windows 11.
 2. **Mobile Client:** A lean Kotlin application built with Jetpack Compose using the modern Android CLI and target platform API 34.
 
 ### 2.2 User Characteristics

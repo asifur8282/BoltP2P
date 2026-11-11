@@ -1,5 +1,5 @@
 # ====================================================================
-# BoltP2P Master .gitignore (Android Kotlin + Desktop Python)
+# JiffBoltP2P Master .gitignore (Android Kotlin + Desktop Python)
 # ====================================================================
 
 # --------------------------------------------------
@@ -7,8 +7,12 @@
 # --------------------------------------------------
 *.log
 **/*.log
+jiffboltp2p.log
+**/jiffboltp2p.log
 boltp2p.log
 **/boltp2p.log
+jiffboltp2p-desktop/Downloads/*
+!jiffboltp2p-desktop/Downloads/.gitkeep
 boltp2p-desktop/Downloads/*
 !boltp2p-desktop/Downloads/.gitkeep
 **/Downloads/*

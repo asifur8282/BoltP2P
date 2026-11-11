@@ -1,13 +1,13 @@
 # Detailed Design Document (DDD)
-## Project: BoltP2P (Ultra-Lightweight P2P Cross-Device Sync)
-**Version:** 1.1  
+## Project: JiffBoltP2P (Ultra-Lightweight P2P Cross-Device Sync)
+**Version:** 1.2.0  
 **Target Platform:** Windows 11 & Android 14 (API 34)  
 
 ---
 
 ## 1. Architectural Overview
 
-BoltP2P establishes a direct, asynchronous TCP connection wrapped in TLS 1.3 across the local Wi-Fi subnet. The architecture consists of an event-driven Python daemon on Windows 11 and a Jetpack Compose single-activity architecture on Android.
+JiffBoltP2P establishes a direct, asynchronous TCP connection wrapped in TLS 1.3 across the local Wi-Fi subnet. The architecture consists of an event-driven Python daemon on Windows 11 and a Jetpack Compose single-activity architecture on Android.
 
 ```
 +---------------------------------------------------------------------------------+
@@ -107,11 +107,11 @@ Every packet transmitted over the socket uses a fixed 18-byte big-endian header:
 
 ### 4.1 Component Layout
 ```text
-boltp2p-desktop/
+jiffboltp2p-desktop/
 ├── main.py              # Application entry point, DPI awareness (V2) & tray runner
 ├── requirements.txt     # Minimal dependencies
 ├── config.json          # Persistent paired device public keys / tokens
-├── boltp2p.spec         # PyInstaller standalone compilation spec
+├── jiffboltp2p.spec     # PyInstaller standalone compilation spec
 ├── core/
 │   ├── network_server.py # Asynchronous TLS socket server & frame parser
 │   ├── discovery.py      # Zeroconf / mDNS broadcaster
@@ -154,7 +154,7 @@ class PendingTransfer:
         self.accepted = False
         self.copied = False
 
-class BoltP2PServer:
+class JiffBoltP2PServer:
     def __init__(self, host: str = "0.0.0.0", port: int = 58241, save_dir: str = "./Downloads"):
         self.host = host
         self.port = port
@@ -178,7 +178,7 @@ class BoltP2PServer:
 
     async def start(self):
         self.server = await asyncio.start_server(self.handle_connection, self.host, self.port)
-        print(f"[BoltP2P] Core daemon running on {self.host}:{self.port}")
+        print(f"[JiffBoltP2P] Core daemon running on {self.host}:{self.port}")
 
     async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         while not writer.is_closing():
@@ -201,9 +201,9 @@ class BoltP2PServer:
                     asyncio.create_task(self._ephemeral_memory_ttl(transfer_id))
                     
                     toast(
-                        "BoltP2P: Text Received",
+                        "JiffBoltP2P: Text Received",
                         metadata.get("preview", "New text snippet received."),
-                        buttons=[{"activationType": "protocol", "arguments": f"boltp2p://copy/{transfer_id}", "content": "Copy to Clipboard"}],
+                        buttons=[{"activationType": "protocol", "arguments": f"jiffboltp2p://copy/{transfer_id}", "content": "Copy to Clipboard"}],
                         on_click=lambda args: self.consume_text(transfer_id)
                     )
 
@@ -214,11 +214,11 @@ class BoltP2PServer:
                     asyncio.create_task(self._ephemeral_memory_ttl(transfer_id, writer))
                     
                     toast(
-                        "BoltP2P: Incoming File",
+                        "JiffBoltP2P: Incoming File",
                         f"File: {metadata.get('filename')} ({metadata.get('size')} bytes)",
                         buttons=[
-                            {"activationType": "protocol", "arguments": f"boltp2p://accept/{transfer_id}", "content": "Accept"},
-                            {"activationType": "protocol", "arguments": f"boltp2p://reject/{transfer_id}", "content": "Reject"}
+                            {"activationType": "protocol", "arguments": f"jiffboltp2p://accept/{transfer_id}", "content": "Accept"},
+                            {"activationType": "protocol", "arguments": f"jiffboltp2p://reject/{transfer_id}", "content": "Reject"}
                         ]
                     )
 
@@ -241,7 +241,7 @@ class BoltP2PServer:
             item = self.pending_offers.pop(transfer_id)
             if not item.accepted:
                 item.payload_data = None
-                print(f"[BoltP2P] TTL expired for {transfer_id}. RAM wiped.")
+                print(f"[JiffBoltP2P] TTL expired for {transfer_id}. RAM wiped.")
                 if writer and not writer.is_closing():
                     self._write_frame(writer, TYPE_REJECT, {"id": transfer_id, "reason": "TIMEOUT_10M"})
 
@@ -291,7 +291,7 @@ class BoltP2PServer:
 The mobile client directly intercepts raw camera byte buffers via CameraX and pipes them into the active socket without hitting the local filesystem:
 
 ```kotlin
-package com.boltp2p.client.data
+package com.jiffboltp2p.client.data
 
 import android.content.Context
 import androidx.camera.core.ImageCapture
@@ -331,7 +331,7 @@ class CameraStreamManager(private val context: Context) {
 
 ### 5.2 Direct Socket Client & Active Lock Streamer
 ```kotlin
-package com.boltp2p.client.data
+package com.jiffboltp2p.client.data
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -342,7 +342,7 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.security.MessageDigest
 
-class BoltP2PSocketClient(private val host: String, private val port: Int = 58241) {
+class JiffBoltP2PSocketClient(private val host: String, private val port: Int = 58241) {
 
     private var socket: Socket? = null
 
