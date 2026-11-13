@@ -101,7 +101,8 @@ class JiffBoltP2PServer:
         on_notify: Optional[Callable[[str, str, str, dict], None]] = None,
         on_transfer_progress: Optional[Callable[[str, int, int], None]] = None,
         on_transfer_complete: Optional[Callable[[str, str, bool], None]] = None,
-        on_connection_change: Optional[Callable[[str, bool], None]] = None
+        on_connection_change: Optional[Callable[[str, bool], None]] = None,
+        on_wake: Optional[Callable[[], None]] = None
     ):
         self.host = host
         self.port = port
@@ -113,6 +114,7 @@ class JiffBoltP2PServer:
         self.on_transfer_progress = on_transfer_progress
         self.on_transfer_complete = on_transfer_complete
         self.on_connection_change = on_connection_change
+        self.on_wake = on_wake
 
         self.pending_offers: Dict[str, PendingTransfer] = {}
         self.server: Optional[asyncio.Server] = None
@@ -166,11 +168,13 @@ class JiffBoltP2PServer:
     async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer_addr = writer.get_extra_info("peername")
         client_id = f"{peer_addr[0]}:{peer_addr[1]}" if peer_addr else "unknown"
-        self.active_clients[client_id] = writer
-        logger.info("Accepted connection from %s", client_id)
+        is_loopback = bool(peer_addr and peer_addr[0] in ("127.0.0.1", "::1"))
 
-        if self.on_connection_change:
-            self.on_connection_change(client_id, True)
+        if not is_loopback:
+            self.active_clients[client_id] = writer
+            logger.info("Accepted connection from %s", client_id)
+            if self.on_connection_change:
+                self.on_connection_change(client_id, True)
 
         try:
             while self.running and not writer.is_closing():
@@ -198,6 +202,14 @@ class JiffBoltP2PServer:
                 transfer_id = metadata.get("id", str(time.time()))
 
                 if msg_type == TYPE_PING:
+                    if metadata.get("action") == "RESTORE_WINDOW":
+                        logger.info("Received restore window request via loopback IPC; activating Quick Window.")
+                        if self.on_wake:
+                            self.on_wake()
+                        self.send_frame(writer, TYPE_PING, {"status": "WOKEN"})
+                        await writer.drain()
+                        writer.close()
+                        break
                     self.send_frame(writer, TYPE_PING, {"status": "PONG", "time": time.time()})
                     await writer.drain()
 
@@ -310,10 +322,11 @@ class JiffBoltP2PServer:
         except Exception as e:
             logger.error("Error handling client %s: %s", client_id, e)
         finally:
-            self.active_clients.pop(client_id, None)
+            if not is_loopback:
+                self.active_clients.pop(client_id, None)
             if not writer.is_closing():
                 writer.close()
-            if self.on_connection_change:
+            if not is_loopback and self.on_connection_change:
                 self.on_connection_change(client_id, False)
 
     async def _ephemeral_memory_ttl(self, transfer_id: str, writer: Optional[asyncio.StreamWriter] = None) -> None:

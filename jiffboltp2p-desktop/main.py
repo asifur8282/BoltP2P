@@ -130,7 +130,8 @@ class JiffBoltP2PApp:
             on_notify=self.handle_server_notify,
             on_transfer_progress=self.handle_transfer_progress,
             on_transfer_complete=self.handle_transfer_complete,
-            on_connection_change=self.handle_connection_change
+            on_connection_change=self.handle_connection_change,
+            on_wake=self.open_window
         )
 
         # 3. Discovery
@@ -365,11 +366,78 @@ class JiffBoltP2PApp:
         os._exit(0)
 
 
+def acquire_single_instance_lock():
+    """
+    Enforces strict single-instance execution on Windows using a named Win32 mutex.
+    If another instance is already running:
+      1. Connects via loopback TCP socket to the primary instance and sends RESTORE_WINDOW.
+      2. Invokes Win32 FindWindowW + ShowWindow(SW_RESTORE) + SetForegroundWindow as fallback.
+      3. Cleanly exits secondary process with status 0.
+    """
+    if sys.platform != "win32":
+        return None
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+        import socket
+        import struct
+
+        ERROR_ALREADY_EXISTS = 183
+        MUTEX_NAME = "Local\\JiffBoltP2P_SingleInstance_Mutex"
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+
+        mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
+        last_error = kernel32.GetLastError()
+
+        if last_error == ERROR_ALREADY_EXISTS:
+            logger.info("Existing JiffBoltP2P instance detected. Signalling existing process to activate...")
+            # 1. Send loopback TCP wake signal
+            try:
+                cfg = load_config()
+                port = cfg.get("port", 58241)
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(1.5)
+                s.connect(("127.0.0.1", port))
+                wake_meta = json.dumps({"action": "RESTORE_WINDOW"}).encode("utf-8")
+                # HEADER_STRUCT = "!4sHIQ" -> 4 bytes magic, 2 bytes type, 4 bytes meta_len, 8 bytes payload_len
+                frame = struct.pack("!4sHIQ", b"XDRP", 0x0001, len(wake_meta), 0)
+                s.sendall(frame + wake_meta)
+                s.close()
+            except Exception as net_err:
+                logger.debug("Loopback wake socket attempt: %s", net_err)
+
+            # 2. Direct Win32 Window restore & bring-to-front fallback
+            try:
+                user32 = ctypes.windll.user32
+                hwnd = user32.FindWindowW(None, "JiffBoltP2P [Desktop Daemon]")
+                if not hwnd:
+                    hwnd = user32.FindWindowW(None, "BoltP2P [Desktop Daemon]")
+                if hwnd:
+                    SW_RESTORE = 9
+                    user32.ShowWindow(hwnd, SW_RESTORE)
+                    user32.SetForegroundWindow(hwnd)
+            except Exception as win_err:
+                logger.debug("Win32 activate fallback: %s", win_err)
+
+            # Cleanly exit secondary instance
+            sys.exit(0)
+
+        return mutex
+    except Exception as e:
+        logger.warning("Could not create/check single instance mutex: %s", e)
+        return None
+
+
 # Backward compatibility alias
 BoltP2PApp = JiffBoltP2PApp
 
 
 if __name__ == "__main__":
+    _instance_mutex = acquire_single_instance_lock()
     try:
         app = JiffBoltP2PApp()
         app.start()
