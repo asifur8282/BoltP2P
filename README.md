@@ -1,7 +1,7 @@
 # JiffBoltP2P
 
 <p align="center">
-  <img src="JiffBoltP2PDemoImg.png" alt="JiffBoltP2P Demo" width="100%" />
+  <img src="JiffBoltP2P_Main.webp" alt="JiffBoltP2P Demo" width="100%" />
 </p>
 
 **JiffBoltP2P** is an ultra-lightweight, zero-cloud peer-to-peer (P2P) sync utility operating directly between a Windows 11 PC and an Android device (API 26 to 34) on the local network. It's built for seamless, clean file and text transfers between your PC and phone—zero cloud processing, zero staging to intermediate temporary disk files, no popups or account logins, and no external relay servers!
